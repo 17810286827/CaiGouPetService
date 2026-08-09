@@ -1,3 +1,28 @@
 spring:
   application:
     name: CaiGouPetService
+  # 数据源:MySQL(目标库 caigoupet,内网 192.168.31.90;密码通过环境变量 DB_PASS 提供,禁止入库)
+  datasource:
+    url: jdbc:mysql://192.168.31.90:3306/caigoupet?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${DB_USER:root}
+    password: ${DB_PASS:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  # 启动时自动执行 schema.sql 建表(幂等:IF NOT EXISTS,无需手动执行)
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+      continue-on-error: true
+
+mybatis:
+  type-aliases-package: caigou.caigoupetservice.entity
+  configuration:
+    map-underscore-to-camel-case: true   # reset_token → resetToken
+
+# JWT 自定义配置(经 SHA-256 派生为 32 字节 HMAC key,任何长度 secret 均可用)
+jwt:
+  secret: ${JWT_SECRET:fallback_dev_secret}
+  expires-in: ${JWT_EXPIRES_IN:7d}       # Boot 自动绑定为 java.time.Duration
+
+server:
+  port: ${PORT:3000}      # 复刻 Express 默认端口

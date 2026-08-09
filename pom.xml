@@ -56,6 +56,42 @@
             <version>4.0.1</version>
             <scope>test</scope>
         </dependency>
+
+        <!-- JWT 签发与校验:jjwt 0.12.x 新式 API,兼容 Java 21 -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>0.12.7</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>0.12.7</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>0.12.7</version>
+            <scope>runtime</scope>
+        </dependency>
+        <!-- 密码哈希:BCryptPasswordEncoder 与 Express bcryptjs($2a$10$...) 互验;版本由 Boot 4.0.7 BOM 管理 -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+        <!-- 二维码生成:zxing 只用 core,自渲染 PNG,避免 javase 拉入 jcommander/jai-imageio 冗余依赖 -->
+        <dependency>
+            <groupId>com.google.zxing</groupId>
+            <artifactId>core</artifactId>
+            <version>3.5.4</version>
+        </dependency>
+        <!-- Lombok:编译期自动生成 getter/setter/构造器等样板代码,版本由 Boot 4.0.7 BOM 管理 -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
     </dependencies>
 
     <build>
