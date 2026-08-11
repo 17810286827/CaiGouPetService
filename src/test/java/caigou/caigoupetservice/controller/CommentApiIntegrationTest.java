@@ -122,4 +122,23 @@ class CommentApiIntegrationTest {
         Integer after = jdbc.queryForObject("SELECT comment_count FROM posts WHERE id = ?", Integer.class, Long.parseLong(pid));
         org.junit.jupiter.api.Assertions.assertEquals(before - 1, after, "删除评论后计数应减一");
     }
+
+    @Test
+    void deleteTwice_secondShould404AndKeepCount() throws Exception {
+        String token = register(PREFIX + "c7");
+        String pid = createPost(token, "评论帖4");
+        String rootId = postComment(token, Long.parseLong(pid), "删两次", null);
+        long postId = Long.parseLong(pid);
+        Integer before = jdbc.queryForObject("SELECT comment_count FROM posts WHERE id = ?", Integer.class, postId);
+        mockMvc.perform(delete("/api/comments/" + rootId).header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("删除成功"));
+        Integer afterFirst = jdbc.queryForObject("SELECT comment_count FROM posts WHERE id = ?", Integer.class, postId);
+        org.junit.jupiter.api.Assertions.assertEquals(before - 1, afterFirst, "首次删除后计数应减一");
+        mockMvc.perform(delete("/api/comments/" + rootId).header("Authorization", "Bearer " + token))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("评论不存在"));
+        Integer afterSecond = jdbc.queryForObject("SELECT comment_count FROM posts WHERE id = ?", Integer.class, postId);
+        org.junit.jupiter.api.Assertions.assertEquals(afterFirst, afterSecond, "重复删除不应再次递减计数");
+    }
 }

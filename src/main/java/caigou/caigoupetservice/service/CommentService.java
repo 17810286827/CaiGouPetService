@@ -90,9 +90,9 @@ public class CommentService {
      * 删除评论:仅作者可删,软删除并维护帖子评论计数 -1
      */
     public void delete(Long id, Long userId) {
-        // 存在性判断用 selectById(不筛状态):软删评论视为不存在
+        // 存在性判断用 selectById(不筛状态):空行或已软删(status=0)均视为不存在,避免重复删除再次递减计数
         Comment comment = commentMapper.selectById(id);
-        if (comment == null) {
+        if (comment == null || comment.getStatus() == 0) {
             throw new ApiException(404, "评论不存在");
         }
         // 仅评论作者本人可删,他人一律 403
