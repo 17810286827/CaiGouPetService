@@ -100,12 +100,13 @@ class PostApiIntegrationTest {
     void getById_shouldIncrementViewCount() throws Exception {
         String token = register(PREFIX + "c4");
         String pid = createPost(token, "浏览量");
-        mockMvc.perform(get("/api/posts/" + pid))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.post.view_count").value(0));
+        // 对齐 Express:响应返回自增后的浏览量(首次访问即为 1)
         mockMvc.perform(get("/api/posts/" + pid))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.post.view_count").value(1));
+        mockMvc.perform(get("/api/posts/" + pid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.post.view_count").value(2));
     }
 
     @Test

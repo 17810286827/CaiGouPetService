@@ -66,8 +66,9 @@ public class PostService {
         if (post == null) {
             throw new ApiException(404, "帖子不存在");
         }
-        // 契约:查询成功即浏览量 +1
+        // 契约:查询成功即浏览量 +1;对内存快照同步自增,响应返回自增后的值(对齐 Express 的 post.increment)
         postMapper.incrementView(id);
+        post.setViewCount(post.getViewCount() + 1);
         return PostView.from(post, authorView(post.getUserId()));
     }
 
@@ -91,8 +92,10 @@ public class PostService {
         upd.setCoverUrl(req.getCoverUrl());
         upd.setTags(req.getTags() == null ? null : toTagsJson(req.getTags()));
         postMapper.update(upd);
-        // 返回最新详情(注意会再自增一次浏览量,与契约一致)
-        return detail(id);
+        // 编辑不虚增浏览量:回查最新帖子直接构造视图(不调 detail,避免触发 incrementView)
+        // selectById 不筛状态:上方已校验帖子存在且非软删,回查结果必非空
+        Post updated = postMapper.selectById(id);
+        return PostView.from(updated, authorView(updated.getUserId()));
     }
 
     /** 软删除帖子:仅作者可删 */
