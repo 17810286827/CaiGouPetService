@@ -8,6 +8,8 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.List;
+
 /**
  * 用户数据访问接口(MyBatis 注解式 SQL)
  * 依赖配置 map-underscore-to-camel-case,数据库下划线字段自动映射为驼峰属性
@@ -44,4 +46,21 @@ public interface UserMapper {
     /** 重置密码并清空找回令牌(过期时间置 NULL) */
     @Update("UPDATE users SET password = #{password}, reset_token = NULL, reset_token_expires = NULL WHERE id = #{id}")
     int clearResetToken(@Param("id") Long id, @Param("password") String password);
+
+    /** 关键字搜索用户(排除自己,匹配用户名或昵称,限 20) */
+    @Select("SELECT * FROM users WHERE status = 1 AND id != #{selfId} " +
+            "AND (username LIKE CONCAT('%', #{q}, '%') OR nickname LIKE CONCAT('%', #{q}, '%')) " +
+            "ORDER BY id DESC LIMIT 20")
+    List<User> search(@Param("q") String q, @Param("selfId") Long selfId);
+
+    /** 更新用户资料(仅更新传入的非空字段) */
+    @Update("<script>UPDATE users SET updated_at = CURRENT_TIMESTAMP" +
+            // <if> 动态拼接:仅包含传入的非空列,保证部分更新语义
+            "<if test='nickname != null'> , nickname = #{nickname}</if>" +
+            "<if test='avatarUrl != null'> , avatar_url = #{avatarUrl}</if>" +
+            "<if test='email != null'> , email = #{email}</if>" +
+            "<if test='gender != null'> , gender = #{gender}</if>" +
+            "<if test='bio != null'> , bio = #{bio}</if>" +
+            " WHERE id = #{id}</script>")
+    int updateProfile(User user);
 }
