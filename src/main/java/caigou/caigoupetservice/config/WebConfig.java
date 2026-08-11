@@ -2,6 +2,7 @@ package caigou.caigoupetservice.config;
 
 import caigou.caigoupetservice.interceptor.JwtAuthInterceptor;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
@@ -16,6 +17,10 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebConfig implements WebMvcConfigurer {
 
     private final JwtAuthInterceptor jwtAuthInterceptor;
+
+    /** 上传存储目录(来自 application.yaml upload.dir,与 ResourceService 共用) */
+    @Value("${upload.dir:./uploads}")
+    private String uploadDir;
 
     /**
      * 注册 JWT 拦截器:对 /api/** 生效,白名单式放行公开认证接口
@@ -50,7 +55,6 @@ public class WebConfig implements WebMvcConfigurer {
      */
     @Override
     public void addResourceHandlers(org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry registry) {
-        String uploadDir = System.getProperty("upload.dir", "./uploads");
         registry.addResourceHandler("/api/files/**").addResourceLocations("file:" + uploadDir + "/");
         registry.addResourceHandler("/uploads/**").addResourceLocations("file:" + uploadDir + "/");
     }
