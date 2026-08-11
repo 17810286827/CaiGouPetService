@@ -1,8 +1,11 @@
 package caigou.caigoupetservice.controller;
 
 import caigou.caigoupetservice.annotation.PublicEndpoint;
+import caigou.caigoupetservice.dto.PageView;
+import caigou.caigoupetservice.dto.PostView;
 import caigou.caigoupetservice.dto.ProfileUpdateRequest;
 import caigou.caigoupetservice.dto.UserSearchView;
+import caigou.caigoupetservice.service.PostService;
 import caigou.caigoupetservice.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +32,7 @@ import java.util.Map;
 public class UserController {
 
     private final UserService userService;
+    private final PostService postService;
 
     /**
      * 搜索用户(需登录):按关键字匹配用户名/昵称,排除当前登录者自己
@@ -49,6 +53,19 @@ public class UserController {
     @GetMapping("/{id}")
     public Map<String, Object> getById(@PathVariable Long id) {
         return Map.of("user", userService.getProfile(id));
+    }
+
+    /**
+     * 用户公开帖子列表(公开):分页返回该用户 status=1 的帖子,按创建时间倒序
+     * 复用 PostService.userPosts,不重复实现业务逻辑
+     */
+    @PublicEndpoint
+    @GetMapping("/{id}/posts")
+    public Map<String, Object> userPosts(@PathVariable Long id,
+                                         @RequestParam(defaultValue = "1") int page,
+                                         @RequestParam(defaultValue = "20") int limit) {
+        PageView<PostView> view = postService.userPosts(id, page, limit);
+        return Map.of("posts", view.getRows(), "total", view.getTotal(), "page", view.getPage());
     }
 
     /**
