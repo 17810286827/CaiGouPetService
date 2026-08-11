@@ -1,4 +1,4 @@
-package caigou.caigoupetservice;
+package caigou.caigoupetservice.controller;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

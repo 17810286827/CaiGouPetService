@@ -1,5 +1,6 @@
 package caigou.caigoupetservice.interceptor;
 
+import caigou.caigoupetservice.annotation.PublicEndpoint;
 import caigou.caigoupetservice.dto.UserView;
 import caigou.caigoupetservice.entity.User;
 import caigou.caigoupetservice.exception.ApiException;
@@ -36,6 +37,10 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         if (!(handler instanceof HandlerMethod)) {
             return true;
         }
+        // 公开只读 GET(@PublicEndpoint 注解)直接放行,镜像 Express 未加 authMiddleware 的公开路由
+        if (isPublicGet(request, (HandlerMethod) handler)) {
+            return true;
+        }
         String header = request.getHeader("Authorization");
         if (header == null || !header.startsWith("Bearer ")) {
             return writeError(response, 401, "未提供认证令牌");
@@ -57,6 +62,14 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         request.setAttribute("currentUserId", user.getId());
         request.setAttribute("currentUser", UserView.from(user));
         return true;
+    }
+
+    /** GET + 方法标注 @PublicEndpoint 时放行(公开只读接口) */
+    private boolean isPublicGet(HttpServletRequest request, HandlerMethod handler) {
+        if (!"GET".equals(request.getMethod())) {
+            return false;
+        }
+        return handler.getMethod().isAnnotationPresent(PublicEndpoint.class);
     }
 
     /**

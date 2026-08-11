@@ -44,4 +44,14 @@ public class WebConfig implements WebMvcConfigurer {
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*");
     }
+
+    /**
+     * 静态资源映射:上传目录经 /api/files/** 与 /uploads/** 提供访问,复刻 Express express.static(upload.dir)
+     */
+    @Override
+    public void addResourceHandlers(org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry registry) {
+        String uploadDir = System.getProperty("upload.dir", "./uploads");
+        registry.addResourceHandler("/api/files/**").addResourceLocations("file:" + uploadDir + "/");
+        registry.addResourceHandler("/uploads/**").addResourceLocations("file:" + uploadDir + "/");
+    }
 }

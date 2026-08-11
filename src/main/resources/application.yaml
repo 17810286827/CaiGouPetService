@@ -13,6 +13,11 @@ spring:
       mode: always
       schema-locations: classpath:schema.sql
       continue-on-error: true
+  # 文件上传:大小限制(multipart 字段名与 Express 一致:file)
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
 
 mybatis:
   type-aliases-package: caigou.caigoupetservice.entity
@@ -26,3 +31,7 @@ jwt:
 
 server:
   port: ${PORT:3000}      # 复刻 Express 默认端口
+
+# 文件上传存储目录(Task 3 经 @Value("${upload.dir}") 注入)
+upload:
+  dir: ${UPLOAD_DIR:./uploads}
