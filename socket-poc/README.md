@@ -8,7 +8,10 @@
 
 ## 验证过程
 
-后端(Spring Boot 4.0.7 / Java 21):`DB_PASS='chen9911.' ./mvnw spring-boot:run`
+> 说明:socket 服务已做属性门控,默认**不启动**;启动后端时必须显式开启
+> `socket.enabled=true`(环境变量或 JVM 参数均可),否则 3001 端口无监听。
+
+后端(Spring Boot 4.0.7 / Java 21):`socket.enabled=true DB_PASS='chen9911.' ./mvnw spring-boot:run`
 - 日志确认 socket 服务启动:`SocketIO server started at port: 3001`
 - 测试脚本:`cd socket-poc && npm install && node test-socket.js`(客户端 v4.8.3,强制 websocket 传输)
 
@@ -49,10 +52,11 @@ POC PASS: 房间广播双向收发成功
 ## 复现方式
 
 ```bash
-# 1. 启动后端(需连真实 MySQL,提供 DB_PASS)
-DB_PASS='chen9911.' ./mvnw spring-boot:run
+# 1. 启动后端(需连真实 MySQL 提供 DB_PASS,并显式开启 socket 服务)
+socket.enabled=true DB_PASS='chen9911.' ./mvnw spring-boot:run
 # 2. 另开终端运行 POC 脚本
 cd socket-poc && npm install && node test-socket.js
 ```
 
 预期输出末尾出现 `POC PASS: 房间广播双向收发成功` 且退出码为 0。
+未设置 `socket.enabled=true` 时 socket 不启动(测试环境即如此,避免多测试上下文端口冲突)。

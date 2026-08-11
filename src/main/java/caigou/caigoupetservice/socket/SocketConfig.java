@@ -5,6 +5,7 @@ import com.corundumstudio.socketio.SocketIOClient;
 import com.corundumstudio.socketio.SocketIOServer;
 import com.corundumstudio.socketio.listener.ConnectListener;
 import com.corundumstudio.socketio.listener.DataListener;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -15,6 +16,8 @@ import java.util.Map;
  * 端口 3001(环境变量 CAIGOPET_SOCKET_PORT 可覆盖),独立于 REST 端口 3000
  * 说明:netty-socketio 2.0.13 的授权回调返回 AuthorizationResult 而非 boolean,
  * 与 socket.io-client v4 的 auth 握手载荷存放在 HandshakeData.getAuthToken() 中
+ * socket 服务默认不启动,设置 socket.enabled=true 时启用(测试环境不设置,
+ * 避免多测试上下文重复绑定 3001 端口冲突;批次 2 接 socket 时开启)
  */
 @Configuration
 public class SocketConfig {
@@ -24,6 +27,7 @@ public class SocketConfig {
 
     /** 启动 socket 服务,并注册 POC 用事件处理器 */
     @Bean(destroyMethod = "stop")
+    @ConditionalOnProperty(prefix = "socket", name = "enabled", havingValue = "true", matchIfMissing = false)
     public SocketIOServer socketIOServer() {
         com.corundumstudio.socketio.Configuration config =
                 new com.corundumstudio.socketio.Configuration();
