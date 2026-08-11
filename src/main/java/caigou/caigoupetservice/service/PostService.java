@@ -119,6 +119,12 @@ public class PostService {
         return new PageView<>(rows, postMapper.countByUser(userId), page);
     }
 
+    /** 按 id 查询可见帖子的视图(供点赞/收藏列表用,不存在返回 null) */
+    public PostView postViewById(Long id) {
+        Post post = postMapper.selectVisibleById(id);
+        return post == null ? null : PostView.from(post, authorView(post.getUserId()));
+    }
+
     /** 查询作者视图:findById 不筛 status,作者被禁用仍展示其历史帖子 */
     private UserView authorView(Long userId) {
         User u = userMapper.findById(userId);

@@ -63,4 +63,20 @@ public interface UserMapper {
             "<if test='bio != null'> , bio = #{bio}</if>" +
             " WHERE id = #{id}</script>")
     int updateProfile(User user);
+
+    /** 获赞数自增/自减(点赞/取消点赞时维护作者计数) */
+    @Update("UPDATE users SET likes_count = likes_count + #{delta} WHERE id = #{id}")
+    int changeLikesCount(@Param("id") Long id, @Param("delta") int delta);
+
+    /** 收藏数自增/自减(收藏/取消收藏时维护本人计数) */
+    @Update("UPDATE users SET favorites_count = favorites_count + #{delta} WHERE id = #{id}")
+    int changeFavoritesCount(@Param("id") Long id, @Param("delta") int delta);
+
+    /** 关注数自增/自减(关注/取关时维护关注者计数) */
+    @Update("UPDATE users SET following_count = following_count + #{delta} WHERE id = #{id}")
+    int changeFollowingCount(@Param("id") Long id, @Param("delta") int delta);
+
+    /** 粉丝数自增/自减(关注/取关时维护被关注者计数) */
+    @Update("UPDATE users SET followers_count = followers_count + #{delta} WHERE id = #{id}")
+    int changeFollowersCount(@Param("id") Long id, @Param("delta") int delta);
 }
