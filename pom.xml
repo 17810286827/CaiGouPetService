@@ -92,6 +92,12 @@
             <artifactId>lombok</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- socket 实时层:netty-socketio 提供 socket.io 协议兼容,版本 2.0.13 声称支持 socket.io 4.x(POC 验证) -->
+        <dependency>
+            <groupId>com.corundumstudio.socketio</groupId>
+            <artifactId>netty-socketio</artifactId>
+            <version>2.0.13</version>
+        </dependency>
     </dependencies>
 
     <build>

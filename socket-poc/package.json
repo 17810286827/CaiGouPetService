@@ -1,0 +1,8 @@
+{
+  "name": "caigoupet-socket-poc",
+  "version": "1.0.0",
+  "description": "验证 netty-socketio 与 socket.io-client v4 的连通性",
+  "dependencies": {
+    "socket.io-client": "4.8.3"
+  }
+}

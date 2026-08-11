@@ -1,0 +1,2 @@
+# npm 安装产物不入库(socket.io-client 已由 package.json 精确锁定 4.8.3)
+node_modules/
