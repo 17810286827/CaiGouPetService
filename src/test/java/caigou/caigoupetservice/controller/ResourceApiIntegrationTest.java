@@ -59,6 +59,9 @@ class ResourceApiIntegrationTest {
         return token;
     }
 
+    /**
+     * 正常上传 png:返回 201,url 以 /api/files/ 开头,类型推断为 1(图片)
+     */
     @Test
     void upload_shouldReturn201WithResource() throws Exception {
         String token = register(PREFIX + "u1");
@@ -70,6 +73,9 @@ class ResourceApiIntegrationTest {
                 .andExpect(jsonPath("$.resource.type").value(1));
     }
 
+    /**
+     * 非白名单扩展名(.exe):返回 400,错误信息包含"不支持的文件类型"
+     */
     @Test
     void upload_unsupportedType_shouldReturn400() throws Exception {
         String token = register(PREFIX + "u2");
@@ -80,6 +86,9 @@ class ResourceApiIntegrationTest {
                 .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("不支持的文件类型")));
     }
 
+    /**
+     * 缺少 file 字段:返回 400 "请选择文件"(由 service 空值校验兜底)
+     */
     @Test
     void upload_noFile_shouldReturn400() throws Exception {
         String token = register(PREFIX + "u3");
@@ -88,6 +97,9 @@ class ResourceApiIntegrationTest {
                 .andExpect(jsonPath("$.error").value("请选择文件"));
     }
 
+    /**
+     * 相同内容的文件(MD5 相同)二次上传:命中去重,返回旧记录且 DB 行数不增
+     */
     @Test
     void upload_sameMd5_shouldDeduplicate() throws Exception {
         String token = register(PREFIX + "u4");
@@ -103,6 +115,9 @@ class ResourceApiIntegrationTest {
         org.junit.jupiter.api.Assertions.assertEquals(1, count, "MD5 去重后不应新增记录");
     }
 
+    /**
+     * 删除他人资源:返回 403 "无权删除此文件"(越权校验)
+     */
     @Test
     void delete_notOwner_shouldReturn403() throws Exception {
         String owner = register(PREFIX + "own");
@@ -113,13 +128,14 @@ class ResourceApiIntegrationTest {
         long rid = OM.readTree(up.getResponse().getContentAsString()).get("resource").get("id").asLong();
 
         String other = register(PREFIX + "oth"); // 复用 testUserId,覆盖 owner 关联清理
-        jdbc.update("DELETE FROM resources WHERE user_id = ?", testUserId);
-        testUserId = null; // 保留 owner 行由后续清理
         mockMvc.perform(delete("/api/resources/" + rid).header("Authorization", "Bearer " + other))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error").value("无权删除此文件"));
     }
 
+    /**
+     * 删除本人资源:返回 200 "删除成功",且 DB 中该资源被软删为 status=0
+     */
     @Test
     void delete_owner_shouldSoftDelete() throws Exception {
         String token = register(PREFIX + "del");
@@ -136,6 +152,9 @@ class ResourceApiIntegrationTest {
         org.junit.jupiter.api.Assertions.assertEquals(0, status, "软删除后 resources.status 应为 0");
     }
 
+    /**
+     * 列表分页 + type 过滤:type=1(图片)命中 1 条,type=2(视频)为空
+     */
     @Test
     void list_shouldReturnPagedAndTypeFiltered() throws Exception {
         String token = register(PREFIX + "lst");
@@ -154,6 +173,9 @@ class ResourceApiIntegrationTest {
                 .andExpect(jsonPath("$.total").value(0));
     }
 
+    /**
+     * 详情为公开只读接口:不带 token 即可访问,不存在的 id 返回 404 "文件不存在"
+     */
     @Test
     void detail_shouldBePublicAndReturn404WhenMissing() throws Exception {
         // 公开接口:不带 token 也能访问
