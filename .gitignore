@@ -34,3 +34,6 @@ build/
 
 # SQLite database files
 *.db
+
+# Git worktrees
+.worktrees/
