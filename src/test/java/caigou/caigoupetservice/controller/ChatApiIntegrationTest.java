@@ -140,4 +140,128 @@ class ChatApiIntegrationTest {
         }
         assertTrue(found, "当前用户房间列表应包含刚创建的房间");
     }
+
+    /** A 向指定房间发一条文本消息(公共步骤,不校验状态码,由调用方断言) */
+    private MvcResult sendMessage(String token, long roomId, String clientMsgId) throws Exception {
+        return mockMvc.perform(post("/api/chat/messages").header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(
+                                Map.of("room_id", roomId, "content", "hi-" + clientMsgId, "client_msg_id", clientMsgId))))
+                .andReturn();
+    }
+
+    @Test
+    void sendMessage_shouldReturn201() throws Exception {
+        // A 建与 B 的私聊后发消息:201,响应 {message} 且 sender 内嵌
+        String tokenA = register(PREFIX + "ma1");
+        register(PREFIX + "mb1");
+        Long bId = userId(PREFIX + "mb1");
+        MvcResult created = createPrivateRoom(tokenA, bId);
+        long roomId = OM.readTree(created.getResponse().getContentAsString()).get("room").get("id").asLong();
+
+        MvcResult r = sendMessage(tokenA, roomId, "m1");
+        assertEquals(201, r.getResponse().getStatus(), "发送消息应返回 201");
+        JsonNode message = OM.readTree(r.getResponse().getContentAsString()).get("message");
+        assertEquals(roomId, message.get("room_id").asLong(), "消息 room_id 应等于房间 id");
+        assertEquals("hi-m1", message.get("content").asText(), "消息 content 应回显");
+        assertTrue(message.has("sender") && message.get("sender").has("id"), "消息应内嵌 sender 用户信息");
+    }
+
+    @Test
+    void sendMessage_duplicateClientMsgId_shouldReturn409() throws Exception {
+        // 同一发送者重复 client_msg_id 触发唯一键,应返回 409「消息重复」
+        String tokenA = register(PREFIX + "md1");
+        register(PREFIX + "md2");
+        Long bId = userId(PREFIX + "md2");
+        MvcResult created = createPrivateRoom(tokenA, bId);
+        long roomId = OM.readTree(created.getResponse().getContentAsString()).get("room").get("id").asLong();
+
+        MvcResult first = sendMessage(tokenA, roomId, "dup1");
+        assertEquals(201, first.getResponse().getStatus(), "前置:首次发送应成功");
+        MvcResult dup = sendMessage(tokenA, roomId, "dup1");
+        assertEquals(409, dup.getResponse().getStatus(), "重复 client_msg_id 应返回 409");
+        assertEquals("消息重复", OM.readTree(dup.getResponse().getContentAsString()).get("error").asText(),
+                "409 错误文案应为「消息重复」");
+    }
+
+    @Test
+    void sendMessage_notMember_shouldReturn403() throws Exception {
+        // C 未加入房间却发消息 → 403「不在聊天室中」
+        String tokenA = register(PREFIX + "me1");
+        register(PREFIX + "me2");
+        String tokenC = register(PREFIX + "me3");
+        Long bId = userId(PREFIX + "me2");
+        MvcResult created = createPrivateRoom(tokenA, bId);
+        long roomId = OM.readTree(created.getResponse().getContentAsString()).get("room").get("id").asLong();
+
+        MvcResult r = sendMessage(tokenC, roomId, "x1");
+        assertEquals(403, r.getResponse().getStatus(), "非成员发消息应返回 403");
+        assertEquals("不在聊天室中", OM.readTree(r.getResponse().getContentAsString()).get("error").asText(),
+                "403 错误文案应为「不在聊天室中」");
+    }
+
+    @Test
+    void getMessages_shouldReturnHistoryAscending() throws Exception {
+        // 连发 2 条,历史接口返回升序 2 条(且含 sender 内嵌)
+        String tokenA = register(PREFIX + "mh1");
+        register(PREFIX + "mh2");
+        Long bId = userId(PREFIX + "mh2");
+        MvcResult created = createPrivateRoom(tokenA, bId);
+        long roomId = OM.readTree(created.getResponse().getContentAsString()).get("room").get("id").asLong();
+        sendMessage(tokenA, roomId, "h1");
+        sendMessage(tokenA, roomId, "h2");
+
+        MvcResult r = mockMvc.perform(get("/api/chat/rooms/" + roomId + "/messages")
+                        .header("Authorization", "Bearer " + tokenA))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode messages = OM.readTree(r.getResponse().getContentAsString()).get("messages");
+        assertEquals(2, messages.size(), "应返回 2 条消息");
+        long first = messages.get(0).get("id").asLong();
+        long second = messages.get(1).get("id").asLong();
+        assertTrue(first < second, "历史消息应按 id 升序返回");
+        assertTrue(messages.get(0).has("sender"), "历史消息应内嵌 sender");
+    }
+
+    @Test
+    void getMessages_before_shouldPage() throws Exception {
+        // before=第2条id 时只返回更早的那条(游标分页)
+        String tokenA = register(PREFIX + "mp1");
+        register(PREFIX + "mp2");
+        Long bId = userId(PREFIX + "mp2");
+        MvcResult created = createPrivateRoom(tokenA, bId);
+        long roomId = OM.readTree(created.getResponse().getContentAsString()).get("room").get("id").asLong();
+        sendMessage(tokenA, roomId, "p1");
+        MvcResult second = sendMessage(tokenA, roomId, "p2");
+        long secondId = OM.readTree(second.getResponse().getContentAsString()).get("message").get("id").asLong();
+
+        MvcResult r = mockMvc.perform(get("/api/chat/rooms/" + roomId + "/messages")
+                        .param("before", String.valueOf(secondId))
+                        .header("Authorization", "Bearer " + tokenA))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode messages = OM.readTree(r.getResponse().getContentAsString()).get("messages");
+        assertEquals(1, messages.size(), "before 分页应只返回更早的消息");
+        assertTrue(messages.get(0).get("id").asLong() < secondId, "返回的消息 id 应小于 before");
+    }
+
+    @Test
+    void roomDetail_shouldReturnMembers() throws Exception {
+        // GET /rooms/:id → {room, members};私聊房间成员为 A、B 两人
+        String tokenA = register(PREFIX + "mr1");
+        register(PREFIX + "mr2");
+        Long bId = userId(PREFIX + "mr2");
+        MvcResult created = createPrivateRoom(tokenA, bId);
+        long roomId = OM.readTree(created.getResponse().getContentAsString()).get("room").get("id").asLong();
+
+        MvcResult r = mockMvc.perform(get("/api/chat/rooms/" + roomId)
+                        .header("Authorization", "Bearer " + tokenA))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode body = OM.readTree(r.getResponse().getContentAsString());
+        assertEquals(roomId, body.get("room").get("id").asLong(), "房间详情应含 room");
+        JsonNode members = body.get("members");
+        assertEquals(2, members.size(), "私聊房间应返回 2 个成员");
+        assertTrue(members.get(0).has("id") && members.get(0).has("username"), "成员应含用户信息");
+    }
 }

@@ -96,6 +96,15 @@ public class SocketConfig {
     }
 
     /**
+     * 暴露 socket 服务实例:供业务层(REST 落库后)做主动实时推送
+     * 注:bean 仅在 socket.enabled=true 时存在,注入方应使用 ObjectProvider 并判空
+     * @return socket 服务实例
+     */
+    public SocketIOServer getServer() {
+        return server;
+    }
+
+    /**
      * 注册 chat 事件全集
      * 契约对齐 Express socket/index.js:chat:user_joined 与 chat:message 排除发送者(对应 socket.to),
      * chat:typing / chat:stop_typing / chat:read 广播给房间内所有客户端含发送者(对应 io.to)
