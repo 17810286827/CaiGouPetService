@@ -9,6 +9,7 @@ import caigou.caigoupetservice.entity.User;
 import caigou.caigoupetservice.exception.ApiException;
 import caigou.caigoupetservice.mapper.PostMapper;
 import caigou.caigoupetservice.mapper.UserMapper;
+import caigou.caigoupetservice.util.Pagination;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -54,6 +55,9 @@ public class PostService {
 
     /** 首页帖子流:置顶优先、时间倒序 */
     public PageView<PostView> feed(int page, int limit) {
+        // 分页钳制:page 最小 1、limit 上限 100,对齐 Express,避免负 offset 触发 SQL 500
+        page = Pagination.clampPage(page);
+        limit = Pagination.clampLimit(limit);
         // 每页数据量小,逐条查询作者组装视图即可,避免 JOIN 复杂化
         List<PostView> rows = postMapper.listFeed((page - 1) * limit, limit)
                 .stream().map(p -> PostView.from(p, authorView(p.getUserId()))).toList();
@@ -113,6 +117,9 @@ public class PostService {
 
     /** 用户公开帖子列表 */
     public PageView<PostView> userPosts(Long userId, int page, int limit) {
+        // 分页钳制:page 最小 1、limit 上限 100,对齐 Express,避免负 offset 触发 SQL 500
+        page = Pagination.clampPage(page);
+        limit = Pagination.clampLimit(limit);
         // 与首页流相同的作者组装方式:findById 不筛 status,禁用作者帖子仍可见
         List<PostView> rows = postMapper.listByUser(userId, (page - 1) * limit, limit)
                 .stream().map(p -> PostView.from(p, authorView(p.getUserId()))).toList();

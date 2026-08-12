@@ -10,6 +10,7 @@ import caigou.caigoupetservice.exception.ApiException;
 import caigou.caigoupetservice.mapper.CommentMapper;
 import caigou.caigoupetservice.mapper.PostMapper;
 import caigou.caigoupetservice.mapper.UserMapper;
+import caigou.caigoupetservice.util.Pagination;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -68,6 +69,9 @@ public class CommentService {
      * 帖子评论树(分页):根评论时间倒序、子评论时间正序,total 为根评论数
      */
     public PageView<CommentView> listByPost(Long postId, int page, int limit) {
+        // 分页钳制:page 最小 1、limit 上限 100,对齐 Express,避免负 offset 触发 SQL 500
+        page = Pagination.clampPage(page);
+        limit = Pagination.clampLimit(limit);
         List<Comment> roots = commentMapper.listRoots(postId, (page - 1) * limit, limit);
         List<Long> rootIds = roots.stream().map(Comment::getId).toList();
         // 按 root_id 分组子评论,避免 N+1 逐条查询;无根评论时跳过,防 IN () 非法 SQL

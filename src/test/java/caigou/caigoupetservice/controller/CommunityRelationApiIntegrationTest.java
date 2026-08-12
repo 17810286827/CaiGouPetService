@@ -100,6 +100,27 @@ class CommunityRelationApiIntegrationTest {
     }
 
     @Test
+    void unlike_secondDelete_should404AndKeepCount() throws Exception {
+        String token = register(PREFIX + "e1");
+        String pid = createPost(token, "并发防重删");
+        long postId = Long.parseLong(pid);
+        mockMvc.perform(post("/api/likes/" + pid).header("Authorization", "Bearer " + token))
+                .andExpect(status().isCreated());
+        Integer before = jdbc.queryForObject("SELECT like_count FROM posts WHERE id = ?", Integer.class, postId);
+        mockMvc.perform(delete("/api/likes/" + pid).header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("取消点赞成功"));
+        Integer afterFirst = jdbc.queryForObject("SELECT like_count FROM posts WHERE id = ?", Integer.class, postId);
+        org.junit.jupiter.api.Assertions.assertEquals(before - 1, afterFirst, "首次取消点赞后计数应减一");
+        // 再次取消:delete() 返回 0 触发 404 门,且计数不再减(并发防重的可观测行为)
+        mockMvc.perform(delete("/api/likes/" + pid).header("Authorization", "Bearer " + token))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("未点赞"));
+        Integer afterSecond = jdbc.queryForObject("SELECT like_count FROM posts WHERE id = ?", Integer.class, postId);
+        org.junit.jupiter.api.Assertions.assertEquals(afterFirst, afterSecond, "重复取消点赞不应再次递减计数");
+    }
+
+    @Test
     void likeList_shouldReturnPosts() throws Exception {
         String token = register(PREFIX + "a4");
         String pid = createPost(token, "列表里的帖子");

@@ -68,8 +68,8 @@ public class SocketConfig {
                 Object authToken = client.getHandshakeData().getAuthToken();
                 Object userId = authToken instanceof Map<?, ?> ? ((Map<?, ?>) authToken).get("userId") : null;
                 String senderId = userId == null ? "unknown" : String.valueOf(userId);
-                // 房间广播:sendEvent 会发给同房间内除发送者外的所有客户端
-                server.getRoomOperations("room:" + roomId).sendEvent("chat:message",
+                // 房间广播:sendEvent 第二参传 client 作为排除客户端,仅发给同房间其它客户端(对齐 Express socket.to(room))
+                server.getRoomOperations("room:" + roomId).sendEvent("chat:message", client,
                         Map.of("room_id", roomId, "user_id", senderId, "content", payload.get("content")));
             }
         });

@@ -5,6 +5,7 @@ import caigou.caigoupetservice.dto.ResourceView;
 import caigou.caigoupetservice.entity.Resource;
 import caigou.caigoupetservice.exception.ApiException;
 import caigou.caigoupetservice.mapper.ResourceMapper;
+import caigou.caigoupetservice.util.Pagination;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -100,6 +101,9 @@ public class ResourceService {
      * @param limit 每页条数
      */
     public PageView<ResourceView> list(Long userId, Integer type, int page, int limit) {
+        // 分页钳制:page 最小 1、limit 上限 100,对齐 Express,避免负 offset 触发 SQL 500
+        page = Pagination.clampPage(page);
+        limit = Pagination.clampLimit(limit);
         // 分页偏移:page 从 1 开始,offset = (page-1)*limit
         int offset = (page - 1) * limit;
         List<ResourceView> rows = resourceMapper.listByUser(userId, type, offset, limit)

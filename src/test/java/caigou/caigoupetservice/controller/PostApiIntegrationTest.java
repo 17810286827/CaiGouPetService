@@ -97,6 +97,21 @@ class PostApiIntegrationTest {
     }
 
     @Test
+    void list_page0AndHugeLimit_shouldBeClamped() throws Exception {
+        String token = register(PREFIX + "c7");
+        createPost(token, "钳制测试");
+        // page=0:service 钳制为 1,返回 200 而非负 offset 触发的 500,响应 page 应回显为 1
+        mockMvc.perform(get("/api/posts").param("page", "0").param("limit", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.posts").isArray())
+                .andExpect(jsonPath("$.page").value(1));
+        // limit=1000:service 钳制为 100,仍返回 200,不会按超大 limit 拉全表
+        mockMvc.perform(get("/api/posts").param("page", "1").param("limit", "1000"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.posts").isArray());
+    }
+
+    @Test
     void getById_shouldIncrementViewCount() throws Exception {
         String token = register(PREFIX + "c4");
         String pid = createPost(token, "浏览量");
