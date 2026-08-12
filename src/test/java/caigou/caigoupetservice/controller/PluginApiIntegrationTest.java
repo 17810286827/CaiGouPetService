@@ -139,6 +139,18 @@ class PluginApiIntegrationTest {
     }
 
     @Test
+    void detail_disabledUserToken_shouldBeNotFavorited() throws Exception {
+        String token = register(PREFIX + "dis");
+        Long pluginId = createPlugin(testUserId, PREFIX + "dis_plug");
+        // 已收藏,但用户被禁用后其有效 token 按未登录处理(与拦截器对禁用用户 401 语义一致)
+        jdbc.update("INSERT INTO plugin_favorites (user_id, plugin_id) VALUES (?, ?)", testUserId, pluginId);
+        jdbc.update("UPDATE users SET status = 0 WHERE id = ?", testUserId);
+        mockMvc.perform(get("/api/plugins/" + pluginId).header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.plugin.isFavorited").value(false));
+    }
+
+    @Test
     void detail_notFound_shouldReturn404() throws Exception {
         mockMvc.perform(get("/api/plugins/999999999"))
                 .andExpect(status().isNotFound())

@@ -2,8 +2,6 @@ package caigou.caigoupetservice.controller;
 
 import caigou.caigoupetservice.annotation.PublicEndpoint;
 import caigou.caigoupetservice.dto.PluginView;
-import caigou.caigoupetservice.exception.ApiException;
-import caigou.caigoupetservice.service.JwtService;
 import caigou.caigoupetservice.service.PluginService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -28,7 +26,6 @@ import java.util.Map;
 public class PluginController {
 
     private final PluginService pluginService;
-    private final JwtService jwtService;
 
     /** 插件列表(公开):分页+排序+分类/搜索过滤 */
     @PublicEndpoint
@@ -59,29 +56,14 @@ public class PluginController {
 
     /**
      * 插件详情(公开):404「Plugin not found」,响应含 isFavorited
-     * @PublicEndpoint 放行后拦截器不写 currentUserId,这里手动解析 Authorization 头:
-     * 有效 token 附 userId 计算收藏态,无头/无效 token 按未收藏处理(不阻断公开访问)
+     * @PublicEndpoint 放行后拦截器不写 currentUserId,这里把 Authorization 头交给 service 解析可选用户:
+     * 有效 token 且用户正常 → 附 userId 计算收藏态;无头/无效 token/禁用用户 → null(未收藏)
      */
     @PublicEndpoint
     @GetMapping("/{id}")
     public Map<String, PluginView> detail(@PathVariable Long id,
                                           @RequestHeader(value = "Authorization", required = false) String authorization) {
-        Long userId = resolveOptionalUserId(authorization);
+        Long userId = pluginService.resolveOptionalUserId(authorization);
         return Map.of("plugin", pluginService.detail(id, userId));
-    }
-
-    /**
-     * 从 Authorization 头解析可选 userId:无头/Bearer 前缀缺失/无效 token 一律返回 null(视为未登录)
-     */
-    private Long resolveOptionalUserId(String authorization) {
-        if (authorization == null || !authorization.startsWith("Bearer ")) {
-            return null;
-        }
-        try {
-            return jwtService.parseUserId(authorization.substring("Bearer ".length()));
-        } catch (ApiException e) {
-            // 无效/过期 token 按未收藏处理,详情仍正常返回
-            return null;
-        }
     }
 }

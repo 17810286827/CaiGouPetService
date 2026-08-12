@@ -33,6 +33,7 @@ public class PluginService {
     private final PluginMapper pluginMapper;
     private final PluginFavoriteMapper pluginFavoriteMapper;
     private final UserMapper userMapper;
+    private final JwtService jwtService;
 
     /**
      * 插件列表:分页钳制后过滤/排序查询,返回 {plugins, pagination:{page,limit,total,totalPages}}
@@ -78,6 +79,25 @@ public class PluginService {
     public List<PluginView> listMy(Long userId) {
         return pluginMapper.listByAuthor(userId).stream()
                 .map(p -> PluginView.from(p, authorView(p.getAuthorId()), false)).toList();
+    }
+
+    /**
+     * 从 Authorization 头解析可选 userId(公开详情接口计算 isFavorited 用):
+     * 无头/无 Bearer 前缀/无效 token 返回 null;有效 token 再复核用户存在且未禁用
+     * (与 JwtAuthInterceptor 语义一致:禁用/已删用户的 token 视为未登录,不计算收藏态)
+     */
+    public Long resolveOptionalUserId(String authorization) {
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            return null;
+        }
+        try {
+            Long userId = jwtService.parseUserId(authorization.substring("Bearer ".length()));
+            User user = userMapper.findById(userId);
+            return (user != null && user.getStatus() != null && user.getStatus() == 1) ? userId : null;
+        } catch (ApiException e) {
+            // 无效/过期 token 按未登录处理,详情仍正常返回
+            return null;
+        }
     }
 
     /** 查询作者视图:findById 不筛 status,作者被禁用仍展示其历史插件;作者行缺失返回 null */

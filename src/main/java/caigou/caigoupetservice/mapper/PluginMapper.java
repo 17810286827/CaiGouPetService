@@ -13,7 +13,9 @@ import java.util.List;
 
 /**
  * 插件数据访问接口(MyBatis 注解式 SQL)
- * list/count 动态拼接:category 与 search 按需追加过滤,排序字段经 ${} 直插(取值来自 service 白名单,无注入风险)
+ * list/count 动态拼接:category 与 search 按需追加过滤
+ * 排序列名/方向在 mapper 内经 choose 映射为字面量白名单,不直接接受外部字符串,杜绝 ${} 注入面
+ * (service 层白名单校验为第一道防线,mapper 自含白名单为第二道防线)
  */
 @Mapper
 public interface PluginMapper {
@@ -22,12 +24,22 @@ public interface PluginMapper {
     @Select("SELECT * FROM plugins WHERE id = #{id}")
     Plugin findById(@Param("id") Long id);
 
-    /** 分页查询已通过插件:按分类/关键字过滤,动态排序,offset+limit 分页 */
+    /**
+     * 分页查询已通过插件:按分类/关键字过滤,动态排序,offset+limit 分页
+     * 排序列名/方向由 choose 映射为字面量白名单(非法值回退 download_count/DESC),非 ${} 直插
+     */
     @Select("<script>SELECT * FROM plugins WHERE status = 1" +
             "<if test='category != null'> AND category = #{category}</if>" +
             "<if test='search != null and search != \"\"'> AND (name LIKE CONCAT('%', #{search}, '%') " +
             "OR description LIKE CONCAT('%', #{search}, '%') OR tags LIKE CONCAT('%', #{search}, '%'))</if>" +
-            " ORDER BY ${sortField} ${sortOrder} LIMIT #{offset}, #{limit}</script>")
+            " ORDER BY " +
+            "<choose><when test=\"sortField == 'name'\">name</when>" +
+            "<when test=\"sortField == 'version'\">version</when>" +
+            "<when test=\"sortField == 'favorite_count'\">favorite_count</when>" +
+            "<when test=\"sortField == 'created_at'\">created_at</when>" +
+            "<otherwise>download_count</otherwise></choose> " +
+            "<choose><when test=\"sortOrder == 'ASC'\">ASC</when><otherwise>DESC</otherwise></choose>" +
+            " LIMIT #{offset}, #{limit}</script>")
     List<Plugin> list(@Param("category") String category, @Param("search") String search,
                       @Param("sortField") String sortField, @Param("sortOrder") String sortOrder,
                       @Param("offset") int offset, @Param("limit") int limit);
