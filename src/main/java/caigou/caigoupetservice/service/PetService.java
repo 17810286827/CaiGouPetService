@@ -250,7 +250,16 @@ public class PetService {
             s.setUserId(userId);
             s.setRoomId(null);
             s.setAllow(toDbAllow(allow));
-            petVisitSettingMapper.insert(s);
+            try {
+                petVisitSettingMapper.insert(s);
+            } catch (DuplicateKeyException e) {
+                // 并发双请求同查 null 后都 insert,后一个撞 uk_user_room 唯一键;
+                // 幂等兜底——重查已存在行并覆盖为本次 allow,避免 500 且保证本次值不丢失(对齐 getState/syncState 模式)
+                row = petVisitSettingMapper.findGlobal(userId);
+                row.setAllow(toDbAllow(allow));
+                petVisitSettingMapper.update(row);
+                log.info("[pet] 全局串门并发撞唯一键,复用并更新已有行 userId={}, allow={}", userId, allow);
+            }
         } else {
             row.setAllow(toDbAllow(allow));
             petVisitSettingMapper.update(row);
@@ -286,7 +295,17 @@ public class PetService {
                 s.setUserId(userId);
                 s.setRoomId(roomId);
                 s.setAllow(toDbAllow(allow));
-                petVisitSettingMapper.insert(s);
+                try {
+                    petVisitSettingMapper.insert(s);
+                } catch (DuplicateKeyException e) {
+                    // 并发双请求同查 null 后都 insert,后一个撞 uk_user_room 唯一键;
+                    // 幂等兜底——重查已存在行并覆盖为本次 allow,避免 500 且保证本次值不丢失(对齐 getState/syncState 模式)
+                    row = petVisitSettingMapper.findRoom(userId, roomId);
+                    row.setAllow(toDbAllow(allow));
+                    petVisitSettingMapper.update(row);
+                    log.info("[pet] 房间串门覆盖并发撞唯一键,复用并更新已有行 userId={}, roomId={}, allow={}",
+                            userId, roomId, allow);
+                }
             } else {
                 row.setAllow(toDbAllow(allow));
                 petVisitSettingMapper.update(row);
