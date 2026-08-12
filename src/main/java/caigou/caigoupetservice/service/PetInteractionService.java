@@ -162,10 +162,17 @@ public class PetInteractionService {
         try {
             messageMapper.insert(msg);
         } catch (DuplicateKeyException e) {
-            // 并发兜底:唯一键 uk_sender_client 冲突说明对方已插入,回查后按成功返回,不重复落库
-            log.warn("[pet:interact] 并发重复事件,按幂等返回: room={}, senderId={}, eventId={}",
+            // 唯一键 uk_sender_client(sender_id+client_msg_id)冲突:同房间可查到说明是并发双写竞态,
+            // 按幂等成功返回;查不到说明是跨房间/跨场景复用了 client_event_id(唯一键不含 room_id),
+            // 属客户端错误——消息未落库,必须返回非 ok,避免"假成功"(广播 message=null 且不触发冷却)
+            log.warn("[pet:interact] client_msg_id 唯一键冲突: room={}, senderId={}, eventId={}",
                     roomId, senderId, clientEventId);
             Message concurrent = messageMapper.findByClientMsgId(roomId, senderId, clientEventId);
+            if (concurrent == null) {
+                result.put("code", "DUPLICATE");
+                result.put("message", "事件 ID 重复,请更换 client_event_id");
+                return result;
+            }
             result.put("ok", true);
             result.put("message", concurrent);
             result.put("action", action);

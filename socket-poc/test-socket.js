@@ -15,11 +15,11 @@ const MSG_CONTENT = 'hello-poc'; // chat:message 断言用消息内容
 // pet:interact 场景:私聊房间 fixture id 与虚拟接收者 id(接收者无需真实 users 行,仅作成员占位)
 const PET_ROOM_ID = 900001;
 const PET_RECEIVER_ID = 900002;
-// 数据库配置:与后端 application.yaml 对齐,DB_PASS 由环境注入(缺省为开发库密码)
+// 数据库配置:与后端 application.yaml 对齐;DB_PASS 为敏感信息,强制由环境变量注入(不硬编码,缺失时 main() 提前退出)
 const DB_CONFIG = {
   host: process.env.DB_HOST || '192.168.31.90',
   user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASS || 'chen9911.',
+  password: process.env.DB_PASS,
   database: 'caigoupet',
 };
 
@@ -111,6 +111,11 @@ async function cleanupPetFixture() {
 async function main() {
   if (!AUTH_TOKEN) {
     console.error('AUTH FAIL: 未设置 CAIGOPET_TOKEN 环境变量(用注册用户的 JWT)');
+    process.exit(1);
+  }
+  // DB_PASS 为数据库密码,禁止硬编码提交;pet:interact fixture 需直连数据库,缺失时直接退出
+  if (!process.env.DB_PASS) {
+    console.error('DB FAIL: 未设置 DB_PASS 环境变量(数据库密码,pet:interact fixture 需要直连 DB)');
     process.exit(1);
   }
   // 服务端事件回显的 user_id 应等于 token 中的真实 userId(任务核心修复点:不再恒为 "unknown")
