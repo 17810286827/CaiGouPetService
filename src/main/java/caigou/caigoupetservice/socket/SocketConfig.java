@@ -8,22 +8,25 @@ import com.corundumstudio.socketio.AuthorizationResult;
 import com.corundumstudio.socketio.HandshakeData;
 import com.corundumstudio.socketio.SocketIOClient;
 import com.corundumstudio.socketio.SocketIOServer;
-import com.corundumstudio.socketio.listener.ConnectListener;
-import com.corundumstudio.socketio.listener.DataListener;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.HashMap;
 import java.util.Map;
 
 /**
- * socket 服务配置:握手鉴权 + 注册 chat:join 与 chat:message 两个事件
+ * socket 服务配置:握手鉴权 + chat 事件全集
+ * 覆盖事件:chat:join / chat:leave / chat:typing / chat:stop_typing / chat:read / chat:message,
+ * 其中 chat:join 会向房间内其它成员广播 chat:user_joined
  * 端口 3001(环境变量 CAIGOPET_SOCKET_PORT 可覆盖),独立于 REST 端口 3000
  * 说明:netty-socketio 2.0.13 的授权回调返回 AuthorizationResult 而非 boolean;
  * 鉴权取 token 双通道——socket.io v4 auth 载荷(auth:{token})或 URL query(?token=),
  * 因 2.0.13 在 engine.io 握手阶段 getAuthToken() 返回 null(POC 已验证),实际走 query 通道
+ * 事件阶段同样不能依赖 getAuthToken() 取用户(该载荷在事件阶段不可用),
+ * 统一走 resolveToken → parseUserId → findById 链路实时重取,保证 user_id 为真实值而非 "unknown"
  * socket 服务默认不启动,设置 socket.enabled=true 时启用(测试环境不设置,
  * 避免多测试上下文重复绑定 3001 端口冲突)
  */
@@ -37,10 +40,10 @@ public class SocketConfig {
     /** 用户数据访问:复核用户是否存在且未禁用(status=1),对齐 REST 拦截器语义 */
     private final UserMapper userMapper;
 
-    /** socket 服务实例:POC 阶段仅用于注册事件;批次 2 可注入业务层做主动推送 */
+    /** socket 服务实例:事件注册与房间广播均基于它;批次 2 可注入业务层做主动推送 */
     private SocketIOServer server;
 
-    /** 启动 socket 服务,并注册 POC 用事件处理器 */
+    /** 启动 socket 服务,并注册 chat 事件全集 */
     @Bean(destroyMethod = "stop")
     @ConditionalOnProperty(prefix = "socket", name = "enabled", havingValue = "true", matchIfMissing = false)
     public SocketIOServer socketIOServer() {
@@ -74,41 +77,171 @@ public class SocketConfig {
         });
 
         server = new SocketIOServer(config);
-        // 连接监听:POC 阶段仅打印客户端 sessionId,便于排查握手是否成功
-        server.addConnectListener(new ConnectListener() {
-            @Override
-            public void onConnect(SocketIOClient client) {
-                System.out.println("[POC] client connected: " + client.getSessionId());
-            }
-        });
-        // chat:join:把客户端加入 room:{roomId},用于房间内广播
-        server.addEventListener("chat:join", String.class, new DataListener<String>() {
-            @Override
-            public void onData(SocketIOClient client, String roomId, com.corundumstudio.socketio.AckRequest ack) {
-                // ack 回调在 POC 阶段未使用:客户端可不带回调,仅单向 join
-                client.joinRoom("room:" + roomId);
-                System.out.println("[POC] joined room: " + roomId);
-            }
-        });
-        // chat:message:收到消息后广播给同房间其它客户端(不含发送者)
-        server.addEventListener("chat:message", Object.class, new DataListener<Object>() {
-            @Override
-            public void onData(SocketIOClient client, Object data, com.corundumstudio.socketio.AckRequest ack) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> payload = (Map<String, Object>) data;
-                Object roomId = payload.get("room_id");
-                // 从握手 auth 载荷中取 userId(v4 客户端 auth:{userId}),POC 阶段未传则记 unknown
-                Object authToken = client.getHandshakeData().getAuthToken();
-                Object userId = authToken instanceof Map<?, ?> ? ((Map<?, ?>) authToken).get("userId") : null;
-                String senderId = userId == null ? "unknown" : String.valueOf(userId);
-                // 房间广播:sendEvent 第二参传 client 作为排除客户端,仅发给同房间其它客户端(对齐 Express socket.to(room))
-                server.getRoomOperations("room:" + roomId).sendEvent("chat:message", client,
-                        Map.of("room_id", roomId, "user_id", senderId, "content", payload.get("content")));
-            }
-        });
+        // 连接监听:记录 sessionId,便于排查握手是否成功
+        server.addConnectListener(client ->
+                log.info("[socket] 客户端连接: sessionId={}", client.getSessionId()));
+        // 注册 chat 事件全集,逻辑拆分到私有方法保持本方法精简
+        registerChatEvents();
         // 启动 socket 服务并绑定 3001 端口(独立于 REST 端口 3000)
         server.start();
         return server;
+    }
+
+    /**
+     * 注册 chat 事件全集
+     * 契约对齐 Express socket/index.js:chat:user_joined 与 chat:message 排除发送者(对应 socket.to),
+     * chat:typing / chat:stop_typing / chat:read 广播给房间内所有客户端含发送者(对应 io.to)
+     */
+    private void registerChatEvents() {
+        // chat:join:加入 room:{roomId},并广播 chat:user_joined 给同房间其它成员(排除发送者)
+        server.addEventListener("chat:join", String.class, (client, roomId, ack) -> {
+            if (roomId == null || roomId.isBlank()) {
+                log.warn("[socket] chat:join 忽略:roomId 为空, sessionId={}", client.getSessionId());
+                return;
+            }
+            Map<String, Object> user = currentUser(client);
+            if (user == null) {
+                log.warn("[socket] chat:join 忽略:解析用户失败, sessionId={}", client.getSessionId());
+                return;
+            }
+            client.joinRoom("room:" + roomId);
+            // 通知房间内已有成员:新成员加入;发送者自身无需再收,故排除(对齐 Express socket.to)
+            server.getRoomOperations("room:" + roomId).sendEvent("chat:user_joined", client,
+                    Map.of("user_id", user.get("userId"), "nickname", user.get("nickname"),
+                            "avatar_url", user.get("avatarUrl")));
+            log.info("[socket] chat:join: room={}, userId={}", roomId, user.get("userId"));
+        });
+
+        // chat:leave:离开房间,无需广播(对齐 Express socket.leave)
+        server.addEventListener("chat:leave", String.class, (client, roomId, ack) -> {
+            if (roomId == null || roomId.isBlank()) {
+                log.warn("[socket] chat:leave 忽略:roomId 为空, sessionId={}", client.getSessionId());
+                return;
+            }
+            client.leaveRoom("room:" + roomId);
+            log.info("[socket] chat:leave: room={}, sessionId={}", roomId, client.getSessionId());
+        });
+
+        // chat:typing:广播输入中状态,发给房间内所有客户端含发送者(对齐 Express io.to)
+        server.addEventListener("chat:typing", Object.class, (client, data, ack) -> {
+            Map<String, Object> payload = asMap(data);
+            if (payload == null || payload.get("room_id") == null) {
+                log.warn("[socket] chat:typing 忽略:缺少 room_id, sessionId={}", client.getSessionId());
+                return;
+            }
+            Map<String, Object> user = currentUser(client);
+            if (user == null) {
+                log.warn("[socket] chat:typing 忽略:解析用户失败, sessionId={}", client.getSessionId());
+                return;
+            }
+            Object roomId = payload.get("room_id");
+            server.getRoomOperations("room:" + roomId).sendEvent("chat:typing",
+                    Map.of("room_id", roomId, "user_id", user.get("userId"), "nickname", user.get("nickname")));
+            log.info("[socket] chat:typing 广播: room={}, userId={}", roomId, user.get("userId"));
+        });
+
+        // chat:stop_typing:广播停止输入状态,发给房间内所有客户端含发送者(对齐 Express io.to)
+        server.addEventListener("chat:stop_typing", Object.class, (client, data, ack) -> {
+            Map<String, Object> payload = asMap(data);
+            if (payload == null || payload.get("room_id") == null) {
+                log.warn("[socket] chat:stop_typing 忽略:缺少 room_id, sessionId={}", client.getSessionId());
+                return;
+            }
+            Map<String, Object> user = currentUser(client);
+            if (user == null) {
+                log.warn("[socket] chat:stop_typing 忽略:解析用户失败, sessionId={}", client.getSessionId());
+                return;
+            }
+            Object roomId = payload.get("room_id");
+            server.getRoomOperations("room:" + roomId).sendEvent("chat:stop_typing",
+                    Map.of("room_id", roomId, "user_id", user.get("userId")));
+            log.info("[socket] chat:stop_typing 广播: room={}, userId={}", roomId, user.get("userId"));
+        });
+
+        // chat:read:广播已读回执,需 room_id 与 message_id 齐备(对齐 Express 校验),发给房间内所有客户端
+        server.addEventListener("chat:read", Object.class, (client, data, ack) -> {
+            Map<String, Object> payload = asMap(data);
+            if (payload == null) {
+                log.warn("[socket] chat:read 忽略:payload 非对象, sessionId={}", client.getSessionId());
+                return;
+            }
+            Object roomId = payload.get("room_id");
+            Object messageId = payload.get("message_id");
+            if (roomId == null || messageId == null) {
+                log.warn("[socket] chat:read 忽略:缺少 room_id 或 message_id, sessionId={}", client.getSessionId());
+                return;
+            }
+            Map<String, Object> user = currentUser(client);
+            if (user == null) {
+                log.warn("[socket] chat:read 忽略:解析用户失败, sessionId={}", client.getSessionId());
+                return;
+            }
+            server.getRoomOperations("room:" + roomId).sendEvent("chat:read",
+                    Map.of("room_id", roomId, "message_id", messageId, "user_id", user.get("userId")));
+            log.info("[socket] chat:read 广播: room={}, messageId={}, userId={}", roomId, messageId, user.get("userId"));
+        });
+
+        // chat:message:转发消息给同房间其它客户端(排除发送者,对齐 Express socket.to),payload 原样转发并补 user_id
+        server.addEventListener("chat:message", Object.class, (client, data, ack) -> {
+            Map<String, Object> payload = asMap(data);
+            if (payload == null || payload.get("room_id") == null) {
+                log.warn("[socket] chat:message 忽略:缺少 room_id, sessionId={}", client.getSessionId());
+                return;
+            }
+            Map<String, Object> user = currentUser(client);
+            if (user == null) {
+                log.warn("[socket] chat:message 忽略:解析用户失败, sessionId={}", client.getSessionId());
+                return;
+            }
+            Object roomId = payload.get("room_id");
+            // 复制原 payload 并补上服务端解析的 user_id,保留 content 等前端字段(避免修改入参 map)
+            Map<String, Object> out = new HashMap<>(payload);
+            out.put("user_id", user.get("userId"));
+            server.getRoomOperations("room:" + roomId).sendEvent("chat:message", client, out);
+            log.info("[socket] chat:message 转发: room={}, from userId={}", roomId, user.get("userId"));
+        });
+    }
+
+    /**
+     * 解析事件阶段当前用户信息
+     * 说明:握手 auth 载荷(getAuthToken)在事件阶段不可用,不能据此取 userId,
+     * 因此统一走 resolveToken → parseUserId → findById 链路实时重取,修复原 POC 中 user_id 恒为 "unknown" 的问题
+     * @param client 当前 socket 客户端
+     * @return {userId,nickname,avatarUrl} 的 Map,解析失败返回 null(调用方已做兜底忽略)
+     */
+    private Map<String, Object> currentUser(SocketIOClient client) {
+        try {
+            String token = resolveToken(client.getHandshakeData());
+            if (token == null || token.isBlank()) {
+                log.warn("[socket] 事件取用户失败:握手数据无 token, sessionId={}", client.getSessionId());
+                return null;
+            }
+            Long userId = jwtService.parseUserId(token);
+            User user = userMapper.findById(userId);
+            if (user == null) {
+                log.warn("[socket] 事件取用户失败:用户不存在, userId={}", userId);
+                return null;
+            }
+            // nickname/avatarUrl 可为空,而 Map.of 禁止 null 值,统一归一化为空串避免序列化异常
+            String nickname = user.getNickname() == null ? "" : user.getNickname();
+            String avatarUrl = user.getAvatarUrl() == null ? "" : user.getAvatarUrl();
+            return Map.of("userId", userId, "nickname", nickname, "avatarUrl", avatarUrl);
+        } catch (ApiException e) {
+            // token 过期/无效(事件阶段极少数情况),记录后返回 null 由调用方兜底
+            log.warn("[socket] 事件取用户失败:{}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 将事件 payload 统一转换为 Map 结构
+     * netty-socketio 反序列化 JSON 对象为 LinkedHashMap,事件 handler 内先经此方法归一化
+     * @param data 事件原始载荷
+     * @return 转换后的 Map,非对象结构返回 null
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> asMap(Object data) {
+        return data instanceof Map<?, ?> ? (Map<String, Object>) data : null;
     }
 
     /**
