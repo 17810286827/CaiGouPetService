@@ -33,9 +33,18 @@ public interface MessageMapper {
     @Select("SELECT * FROM messages WHERE room_id=#{roomId} AND status=1 ORDER BY id DESC LIMIT #{limit}")
     List<Message> listLatest(@Param("roomId") Long roomId, @Param("limit") int limit);
 
-    /** 查询房间内最近 3 条宠物互动系统消息(msg_type=5,用于串门/宠物互动上下文) */
-    @Select("SELECT * FROM messages WHERE room_id=#{roomId} AND sender_id=#{senderId} AND msg_type=5 ORDER BY created_at DESC LIMIT 3")
+    /** 查询房间内最近 3 条宠物互动系统消息(msg_type=5 且 status=1,用于串门/宠物互动冷却校验) */
+    @Select("SELECT * FROM messages WHERE room_id=#{roomId} AND sender_id=#{senderId} AND msg_type=5 AND status=1 ORDER BY created_at DESC LIMIT 3")
     List<Message> findRecentPetInteract(@Param("roomId") Long roomId, @Param("senderId") Long senderId);
+
+    /** 查询最近一条宠物互动消息的创建时间(epoch 毫秒);UNIX_TIMESTAMP 在 DB 侧换算,规避 JDBC 时间串与 JVM 时区不一致 */
+    @Select("SELECT UNIX_TIMESTAMP(created_at) * 1000 FROM messages WHERE room_id=#{roomId} AND sender_id=#{senderId} " +
+            "AND msg_type=5 AND status=1 AND content LIKE CONCAT('%', 'pet_interact', '%') ORDER BY created_at DESC LIMIT 1")
+    Long findLastPetInteractTime(@Param("roomId") Long roomId, @Param("senderId") Long senderId);
+
+    /** 按 client_msg_id 精确查消息(幂等去重:同一发送者同一事件 id 重复提交时复用) */
+    @Select("SELECT * FROM messages WHERE room_id=#{roomId} AND sender_id=#{senderId} AND client_msg_id=#{clientMsgId} LIMIT 1")
+    Message findByClientMsgId(@Param("roomId") Long roomId, @Param("senderId") Long senderId, @Param("clientMsgId") String clientMsgId);
 
     /** 按主键查询消息 */
     @Select("SELECT * FROM messages WHERE id=#{id}")

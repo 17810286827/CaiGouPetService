@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "验证 netty-socketio 与 socket.io-client v4 的连通性",
   "dependencies": {
+    "mysql2": "^3.23.3",
     "socket.io-client": "4.8.3"
   }
 }
