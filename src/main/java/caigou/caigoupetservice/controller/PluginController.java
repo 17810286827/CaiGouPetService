@@ -5,12 +5,15 @@ import caigou.caigoupetservice.dto.PluginView;
 import caigou.caigoupetservice.service.PluginService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Map;
@@ -52,6 +55,19 @@ public class PluginController {
     public Map<String, List<PluginView>> my(HttpServletRequest request) {
         Long userId = (Long) request.getAttribute("currentUserId");
         return Map.of("plugins", pluginService.listMy(userId));
+    }
+
+    /**
+     * 上传插件(需登录):multipart 字段 file(zip)
+     * 200=同名更新 / 201=新建,状态码由 service 上传结果携带;file 设为 required=false,
+     * 缺文件时交给 service 抛 400 业务文案,避免 Spring 先抛 MissingServletRequestPartException 兜底 500
+     */
+    @PostMapping("/upload")
+    public ResponseEntity<Map<String, Object>> upload(HttpServletRequest request,
+                                                      @RequestParam(value = "file", required = false) MultipartFile file) {
+        Long userId = (Long) request.getAttribute("currentUserId");
+        PluginService.UploadResult result = pluginService.upload(userId, file);
+        return ResponseEntity.status(result.getStatus()).body(result.getBody());
     }
 
     /**

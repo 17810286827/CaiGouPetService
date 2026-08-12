@@ -7,13 +7,20 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -171,5 +178,87 @@ class PluginApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.plugins").isArray())
                 .andExpect(jsonPath("$.plugins[0].name").value(PREFIX + "mine"));
+    }
+
+    /**
+     * 用 ZipOutputStream 内存构造 zip 字节数组(不落盘,供 MockMultipartFile 上传)
+     * @param entries 文件名 → 内容 的映射,保持无目录结构(entry 名即根路径文件名)
+     */
+    private byte[] zipOf(Map<String, byte[]> entries) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (ZipOutputStream zos = new ZipOutputStream(baos)) {
+            for (Map.Entry<String, byte[]> e : entries.entrySet()) {
+                zos.putNextEntry(new ZipEntry(e.getKey()));
+                zos.write(e.getValue());
+                zos.closeEntry();
+            }
+        }
+        return baos.toByteArray();
+    }
+
+    /** 构造对齐 REQUIRED_MANIFEST_FIELDS 的合法 manifest.json 内容(entry 引用 index.html,zip 内须含该文件) */
+    private String validManifest(String name, String version) {
+        return "{\"id\":\"test-plugin\",\"name\":\"" + name + "\",\"version\":\"" + version
+                + "\",\"description\":\"测试插件\",\"author\":\"tester\",\"entry\":\"index.html\"}";
+    }
+
+    @Test
+    void upload_missingManifest_should400() throws Exception {
+        String token = register(PREFIX + "up1");
+        // zip 内只有 readme.txt,无 manifest.json → 400 固定文案
+        byte[] zip = zipOf(Map.of("readme.txt", "hello".getBytes(StandardCharsets.UTF_8)));
+        MockMultipartFile file = new MockMultipartFile("file", "p.zip", "application/zip", zip);
+        mockMvc.perform(multipart("/api/plugins/upload").file(file).header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("manifest.json not found in plugin package"));
+    }
+
+    @Test
+    void upload_validZip_should201() throws Exception {
+        String token = register(PREFIX + "up2");
+        // 合法 manifest(对齐 REQUIRED_MANIFEST_FIELDS)+ entry 引用的 index.html 真实文件 → 201 新建
+        String name = PREFIX + "up2plug";
+        byte[] zip = zipOf(Map.of(
+                "manifest.json", validManifest(name, "1.0.0").getBytes(StandardCharsets.UTF_8),
+                "index.html", "<!DOCTYPE html><html><body>hi</body></html>".getBytes(StandardCharsets.UTF_8)));
+        MockMultipartFile file = new MockMultipartFile("file", "p.zip", "application/zip", zip);
+        mockMvc.perform(multipart("/api/plugins/upload").file(file).header("Authorization", "Bearer " + token))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.message").value("Plugin uploaded successfully"))
+                .andExpect(jsonPath("$.plugin.name").value(name))
+                .andExpect(jsonPath("$.plugin.version").value("1.0.0"))
+                .andExpect(jsonPath("$.plugin.category").value("tool"))
+                .andExpect(jsonPath("$.warnings").isArray());
+    }
+
+    @Test
+    void upload_duplicateName_shouldUpdate() throws Exception {
+        String token = register(PREFIX + "up3");
+        String name = PREFIX + "up3plug";
+        // 首次上传 v1.0.0 → 201 新建
+        byte[] zipV1 = zipOf(Map.of(
+                "manifest.json", validManifest(name, "1.0.0").getBytes(StandardCharsets.UTF_8),
+                "index.html", "<html></html>".getBytes(StandardCharsets.UTF_8)));
+        mockMvc.perform(multipart("/api/plugins/upload")
+                        .file(new MockMultipartFile("file", "p.zip", "application/zip", zipV1))
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isCreated());
+        // 同名同作者再传 v2.0.0 → 200 更新,版本号更新
+        byte[] zipV2 = zipOf(Map.of(
+                "manifest.json", validManifest(name, "2.0.0").getBytes(StandardCharsets.UTF_8),
+                "index.html", "<html>v2</html>".getBytes(StandardCharsets.UTF_8)));
+        mockMvc.perform(multipart("/api/plugins/upload")
+                        .file(new MockMultipartFile("file", "p.zip", "application/zip", zipV2))
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Plugin updated successfully"))
+                .andExpect(jsonPath("$.plugin.version").value("2.0.0"));
+        // DB 复核:同一 name+author 仅一行,version 为 2.0.0
+        Integer rows = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM plugins WHERE name = ? AND author_id = ?", Integer.class, name, testUserId);
+        org.junit.jupiter.api.Assertions.assertEquals(1, rows, "同名上传应更新而非新增");
+        String version = jdbc.queryForObject(
+                "SELECT version FROM plugins WHERE name = ? AND author_id = ?", String.class, name, testUserId);
+        org.junit.jupiter.api.Assertions.assertEquals("2.0.0", version, "版本应更新为 2.0.0");
     }
 }

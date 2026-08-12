@@ -35,5 +35,8 @@ build/
 # SQLite database files
 *.db
 
+# 上传文件目录(运行时产物,测试也会写入,不入库)
+uploads/
+
 # Git worktrees
 .worktrees/

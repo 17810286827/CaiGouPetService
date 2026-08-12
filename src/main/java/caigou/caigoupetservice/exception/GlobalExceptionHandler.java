@@ -17,11 +17,13 @@ import java.util.Map;
 public class GlobalExceptionHandler {
 
     /**
-     * 业务异常:按 ApiException 携带的状态码与信息返回
+     * 业务异常:按 ApiException 携带的状态码返回;若带自定义 body(如插件校验的 details/warnings)则原样序列化,
+     * 否则默认返回 {error:"中文信息"},与 Express 响应风格一致
      */
     @ExceptionHandler(ApiException.class)
-    public ResponseEntity<Map<String, String>> handleApi(ApiException e) {
-        return ResponseEntity.status(e.getStatus()).body(Map.of("error", e.getMessage()));
+    public ResponseEntity<?> handleApi(ApiException e) {
+        Object body = e.getBody() != null ? e.getBody() : Map.of("error", e.getMessage());
+        return ResponseEntity.status(e.getStatus()).body(body);
     }
 
     /**
