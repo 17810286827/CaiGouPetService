@@ -20,6 +20,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -149,6 +150,8 @@ public class ChatService {
             // uk_sender_client 唯一键冲突:同一发送者重复 client_msg_id
             throw new ApiException(409, "消息重复");
         }
+        // created_at 由 DB CURRENT_TIMESTAMP 维护,insert 只回填 id;重查回填后再构造视图与 socket payload
+        msg = messageMapper.findById(msg.getId());
         MessageView view = MessageView.from(msg, userView(userId));
         pushMessage(roomId, view);
         return view;
@@ -185,10 +188,10 @@ public class ChatService {
 
     /**
      * 房间详情:非成员 403(文案与该接口不一致),返回 {room, members}
-     * members 为成员 UserView 列表,与任务契约一致
+     * members 每个元素对齐 Express ChatRoomMember 含内嵌 User 的结构(前端 chatlist.js 依赖 m.user_id 与 m.User)
      * @param userId 当前登录用户
      * @param roomId 聊天室ID
-     * @return {room: ChatRoomView, members: [UserView]}
+     * @return {room: ChatRoomView, members: [成员Map]}
      */
     public Map<String, Object> roomDetail(Long userId, Long roomId) {
         if (chatRoomMemberMapper.find(roomId, userId) == null) {
@@ -197,7 +200,28 @@ public class ChatService {
         return Map.of(
                 "room", ChatRoomView.from(chatRoomMapper.findById(roomId), null),
                 "members", chatRoomMemberMapper.listByRoom(roomId).stream()
-                        .map(m -> userView(m.getUserId())).toList());
+                        .map(this::memberView).toList());
+    }
+
+    /**
+     * 组装成员视图 Map:对齐 Express ChatRoomMember 含内嵌 User 的 snake_case 结构
+     * 扁平 UserView 会导致前端私聊名退化为「私聊」且 role 丢失,故按成员字段 + user 内嵌返回
+     * @param m 成员实体
+     * @return {id, room_id, user_id, role, last_read_msg_id, created_at, user}
+     */
+    private Map<String, Object> memberView(ChatRoomMember m) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", m.getId());
+        map.put("room_id", m.getRoomId());
+        map.put("user_id", m.getUserId());
+        map.put("role", m.getRole());
+        map.put("last_read_msg_id", m.getLastReadMsgId());
+        map.put("created_at", m.getCreatedAt());
+        UserView u = userView(m.getUserId());
+        if (u != null) {
+            map.put("user", u);
+        }
+        return map;
     }
 
     /**

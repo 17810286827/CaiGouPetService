@@ -165,6 +165,7 @@ class ChatApiIntegrationTest {
         assertEquals(roomId, message.get("room_id").asLong(), "消息 room_id 应等于房间 id");
         assertEquals("hi-m1", message.get("content").asText(), "消息 content 应回显");
         assertTrue(message.has("sender") && message.get("sender").has("id"), "消息应内嵌 sender 用户信息");
+        assertTrue(message.has("created_at"), "消息应含 DB 维护的 created_at(insert 后重查回填)");
     }
 
     @Test
@@ -262,6 +263,8 @@ class ChatApiIntegrationTest {
         assertEquals(roomId, body.get("room").get("id").asLong(), "房间详情应含 room");
         JsonNode members = body.get("members");
         assertEquals(2, members.size(), "私聊房间应返回 2 个成员");
-        assertTrue(members.get(0).has("id") && members.get(0).has("username"), "成员应含用户信息");
+        JsonNode first = members.get(0);
+        assertTrue(first.has("user_id") && first.has("role"), "成员应含 user_id 与 role(对齐 Express)");
+        assertTrue(first.has("user") && first.get("user").has("username"), "成员应内嵌 user 用户信息");
     }
 }
