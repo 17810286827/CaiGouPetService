@@ -67,11 +67,11 @@ public class PluginController {
     }
 
     /**
-     * 我的收藏列表(需登录):返回 {favorites:[Plugin 含 author]}
-     * 字面量路径,须在 GET /{id} 之前注册,避免被路径变量吞掉
+     * 我的收藏列表(需登录):返回 {favorites:[PluginFavorite 包装对象,内嵌大写 Plugin]}
+     * 包装结构与 Express 一致(前端写死 f.Plugin 取数),字面量路径须在 GET /{id} 之前注册
      */
     @GetMapping("/favorites/list")
-    public Map<String, List<PluginView>> favoritesList(HttpServletRequest request) {
+    public Map<String, List<Map<String, Object>>> favoritesList(HttpServletRequest request) {
         Long userId = (Long) request.getAttribute("currentUserId");
         return Map.of("favorites", pluginService.listFavorites(userId));
     }

@@ -319,6 +319,8 @@ class PluginApiIntegrationTest {
     @Test
     void favorite_toggle() throws Exception {
         String token = register(PREFIX + "fav");
+        // 收藏者即 register 对应用户:显式捕获本地变量,DB 复核不依赖类级可变 testUserId
+        Long favoriterId = testUserId;
         Long pluginId = createPlugin(testUserId, PREFIX + "fav_plug");
 
         // 首次收藏 → favorited:true 且收藏数 1
@@ -331,9 +333,9 @@ class PluginApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.favorited").value(false))
                 .andExpect(jsonPath("$.favorite_count").value(0));
-        // DB 复核:无残留收藏记录
+        // DB 复核:无残留收藏记录(按收藏者 id 查)
         Integer favRows = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM plugin_favorites WHERE user_id = ? AND plugin_id = ?", Integer.class, testUserId, pluginId);
+                "SELECT COUNT(*) FROM plugin_favorites WHERE user_id = ? AND plugin_id = ?", Integer.class, favoriterId, pluginId);
         assertEquals(0, favRows, "toggle 取消后不应有收藏记录");
     }
 
@@ -371,13 +373,15 @@ class PluginApiIntegrationTest {
         String token = register(PREFIX + "flist");
         Long pluginId = createPlugin(testUserId, PREFIX + "flist_plug");
 
-        // 收藏后查询 → 列表含该插件(含 author)
+        // 收藏后查询 → 列表含该插件,且结构镜像 Express:元素为包装对象,插件内嵌大写 Plugin 键(前端 f.Plugin 取数)
         mockMvc.perform(post("/api/plugins/" + pluginId + "/favorite").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk());
         mockMvc.perform(get("/api/plugins/favorites/list").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.favorites").isArray())
-                .andExpect(jsonPath("$.favorites[0].name").value(PREFIX + "flist_plug"))
-                .andExpect(jsonPath("$.favorites[0].author.username").value(PREFIX + "flist"));
+                .andExpect(jsonPath("$.favorites[0].Plugin.name").value(PREFIX + "flist_plug"))
+                .andExpect(jsonPath("$.favorites[0].Plugin.author.username").value(PREFIX + "flist"))
+                .andExpect(jsonPath("$.favorites[0].user_id").value(testUserId))
+                .andExpect(jsonPath("$.favorites[0].plugin_id").value(pluginId));
     }
 }

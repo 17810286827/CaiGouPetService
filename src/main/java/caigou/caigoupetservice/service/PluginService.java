@@ -187,19 +187,26 @@ public class PluginService {
     }
 
     /**
-     * 我的收藏插件列表(需登录):按收藏时间倒序逐条组装插件视图(含作者,isFavorited 恒 true)
-     * 契约对齐 Express GET /api/plugins/favorites/list:返回 {favorites:[Plugin 含 author]}
+     * 我的收藏列表(需登录):按收藏时间倒序逐条返回 PluginFavorite 包装对象,精确镜像 Express
+     * 每项为 {id, user_id, plugin_id, created_at, Plugin:{...含 author}}——前端 plugins.js loadFavorites
+     * 写死 data.favorites.map(f => f.Plugin),必须用大写 Plugin 键且不能平铺成纯插件数组
      * 收藏指向的插件已不存在时防御性跳过(正常已被删除级联清理,不应出现)
      */
-    public List<PluginView> listFavorites(Long userId) {
-        List<PluginView> favorites = new ArrayList<>();
+    public List<Map<String, Object>> listFavorites(Long userId) {
+        List<Map<String, Object>> favorites = new ArrayList<>();
         for (PluginFavorite fav : pluginFavoriteMapper.listByUser(userId)) {
             Plugin plugin = pluginMapper.findById(fav.getPluginId());
             if (plugin == null) {
                 log.warn("收藏记录指向不存在的插件,跳过 pluginId={}", fav.getPluginId());
                 continue;
             }
-            favorites.add(PluginView.from(plugin, authorView(plugin.getAuthorId()), true));
+            // 包装对象键名与 Express Sequelize 序列化一致:id/user_id/plugin_id/created_at + 内嵌大写 Plugin
+            favorites.add(Map.of(
+                    "id", fav.getId(),
+                    "user_id", fav.getUserId(),
+                    "plugin_id", fav.getPluginId(),
+                    "created_at", fav.getCreatedAt(),
+                    "Plugin", PluginView.from(plugin, authorView(plugin.getAuthorId()), true)));
         }
         return favorites;
     }
