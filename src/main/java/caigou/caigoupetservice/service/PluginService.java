@@ -3,6 +3,7 @@ package caigou.caigoupetservice.service;
 import caigou.caigoupetservice.dto.PluginView;
 import caigou.caigoupetservice.dto.UserView;
 import caigou.caigoupetservice.entity.Plugin;
+import caigou.caigoupetservice.entity.PluginFavorite;
 import caigou.caigoupetservice.entity.User;
 import caigou.caigoupetservice.exception.ApiException;
 import caigou.caigoupetservice.mapper.PluginFavoriteMapper;
@@ -105,6 +106,102 @@ public class PluginService {
     public List<PluginView> listMy(Long userId) {
         return pluginMapper.listByAuthor(userId).stream()
                 .map(p -> PluginView.from(p, authorView(p.getAuthorId()), false)).toList();
+    }
+
+    /**
+     * 下载插件(公开):仅 status=1 可下载,不存在/非已通过/磁盘文件缺失均返回 404;下载数自增
+     * 契约对齐 Express POST /api/plugins/:id/download:下载文件名 {name}-v{version}.zip
+     * @return DownloadResult{filePath, fileName, downloadCount},由 controller 组装文件流响应
+     */
+    public DownloadResult download(Long id) {
+        Plugin plugin = pluginMapper.findById(id);
+        if (plugin == null || plugin.getStatus() == null || plugin.getStatus() != 1) {
+            throw new ApiException(404, "Plugin not found");
+        }
+        // 磁盘文件缺失 → 404(镜像 Express !fs.existsSync 分支,文案一致)
+        if (plugin.getFilePath() == null || !Files.exists(Paths.get(plugin.getFilePath()))) {
+            throw new ApiException(404, "Plugin file not found on server");
+        }
+        pluginMapper.incrementDownload(id);
+        // 新下载数 = 原值 + 1(列有 DEFAULT 0 非空,null 防御性兜底)
+        int newCount = (plugin.getDownloadCount() == null ? 0 : plugin.getDownloadCount()) + 1;
+        String fileName = plugin.getName() + "-v" + plugin.getVersion() + ".zip";
+        log.info("插件下载 id={} name={} downloadCount={}", id, plugin.getName(), newCount);
+        return new DownloadResult(plugin.getFilePath(), fileName, newCount);
+    }
+
+    /**
+     * 收藏 toggle(需登录):已收藏则取消(删记录+收藏数自减),未收藏则收藏(插记录+自增)
+     * 契约对齐 Express POST /api/plugins/:id/favorite:插件不存在返回 404,响应 {favorited, favorite_count}
+     */
+    public Map<String, Object> toggleFavorite(Long userId, Long id) {
+        Plugin plugin = pluginMapper.findById(id);
+        if (plugin == null) {
+            throw new ApiException(404, "Plugin not found");
+        }
+        int current = plugin.getFavoriteCount() == null ? 0 : plugin.getFavoriteCount();
+        if (pluginFavoriteMapper.find(userId, id) != null) {
+            // 已收藏 → 取消收藏:收藏数自减但不低于 0(镜像 Express Math.max(0,...))
+            pluginFavoriteMapper.deleteByUserPlugin(userId, id);
+            pluginMapper.decrementFavorite(id);
+            int newCount = Math.max(0, current - 1);
+            log.info("取消收藏 userId={} pluginId={} favoriteCount={}", userId, id, newCount);
+            return Map.of("favorited", false, "favorite_count", newCount);
+        }
+        // 未收藏 → 收藏:插入记录 + 收藏数自增
+        PluginFavorite favorite = new PluginFavorite();
+        favorite.setUserId(userId);
+        favorite.setPluginId(id);
+        pluginFavoriteMapper.insert(favorite);
+        pluginMapper.incrementFavorite(id);
+        int newCount = current + 1;
+        log.info("收藏 userId={} pluginId={} favoriteCount={}", userId, id, newCount);
+        return Map.of("favorited", true, "favorite_count", newCount);
+    }
+
+    /**
+     * 删除插件(需登录,仅作者):404 不存在,403 非作者;级联清理收藏记录 + 删磁盘文件 + 删行
+     * 契约对齐 Express DELETE /api/plugins/:id:成功返回 {message:"Plugin deleted"}
+     */
+    public Map<String, String> deletePlugin(Long userId, Long id) {
+        Plugin plugin = pluginMapper.findById(id);
+        if (plugin == null) {
+            throw new ApiException(404, "Plugin not found");
+        }
+        if (!userId.equals(plugin.getAuthorId())) {
+            throw new ApiException(403, "You can only delete your own plugins");
+        }
+        // 删磁盘文件:文件不存在忽略(镜像 Express fs.existsSync 后 unlinkSync,失败吞掉)
+        if (plugin.getFilePath() != null) {
+            try {
+                Files.deleteIfExists(Paths.get(plugin.getFilePath()));
+            } catch (IOException e) {
+                log.warn("删除插件磁盘文件失败(忽略) path={}", plugin.getFilePath(), e);
+            }
+        }
+        // 级联清理该插件的收藏记录,再删插件行
+        pluginFavoriteMapper.deleteByPlugin(id);
+        pluginMapper.deleteById(id);
+        log.info("插件删除 id={} name={} userId={}", id, plugin.getName(), userId);
+        return Map.of("message", "Plugin deleted");
+    }
+
+    /**
+     * 我的收藏插件列表(需登录):按收藏时间倒序逐条组装插件视图(含作者,isFavorited 恒 true)
+     * 契约对齐 Express GET /api/plugins/favorites/list:返回 {favorites:[Plugin 含 author]}
+     * 收藏指向的插件已不存在时防御性跳过(正常已被删除级联清理,不应出现)
+     */
+    public List<PluginView> listFavorites(Long userId) {
+        List<PluginView> favorites = new ArrayList<>();
+        for (PluginFavorite fav : pluginFavoriteMapper.listByUser(userId)) {
+            Plugin plugin = pluginMapper.findById(fav.getPluginId());
+            if (plugin == null) {
+                log.warn("收藏记录指向不存在的插件,跳过 pluginId={}", fav.getPluginId());
+                continue;
+            }
+            favorites.add(PluginView.from(plugin, authorView(plugin.getAuthorId()), true));
+        }
+        return favorites;
     }
 
     /**
@@ -290,6 +387,18 @@ public class PluginService {
     private UserView authorView(Long authorId) {
         User author = userMapper.findById(authorId);
         return author == null ? null : UserView.from(author);
+    }
+
+    /** 下载结果:磁盘文件路径 + 下载文件名 + 自增后下载数,供 controller 组装文件流响应 */
+    @Getter
+    @AllArgsConstructor
+    public static class DownloadResult {
+        /** 磁盘文件路径(controller 用 FileSystemResource 流式返回) */
+        private final String filePath;
+        /** 下载文件名({name}-v{version}.zip,Content-Disposition 用) */
+        private final String fileName;
+        /** 自增后的下载数 */
+        private final int downloadCount;
     }
 
     /** 上传结果:status 区分 201 新建 / 200 同名更新,body 为最终响应体(controller 据此设状态码) */

@@ -14,14 +14,22 @@ import org.springframework.test.web.servlet.MvcResult;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+import static org.hamcrest.Matchers.containsString;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -274,5 +282,102 @@ class PluginApiIntegrationTest {
         String version = jdbc.queryForObject(
                 "SELECT version FROM plugins WHERE name = ? AND author_id = ?", String.class, name, testUserId);
         org.junit.jupiter.api.Assertions.assertEquals("2.0.0", version, "版本应更新为 2.0.0");
+    }
+
+    @Test
+    void download_shouldIncrementCountAndReturnFile() throws Exception {
+        String token = register(PREFIX + "dl");
+        String name = PREFIX + "dlplug";
+        byte[] zip = zipOf(Map.of(
+                "manifest.json", validManifest(name, "1.0.0").getBytes(StandardCharsets.UTF_8),
+                "index.html", "<!DOCTYPE html><html><body>hi</body></html>".getBytes(StandardCharsets.UTF_8)));
+        // 上传造带真实磁盘文件的插件,拿到 id 与 file_path
+        MvcResult up = mockMvc.perform(multipart("/api/plugins/upload")
+                        .file(new MockMultipartFile("file", "p.zip", "application/zip", zip))
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isCreated())
+                .andReturn();
+        var pluginNode = OM.readTree(up.getResponse().getContentAsString()).path("plugin");
+        long pluginId = pluginNode.path("id").asLong();
+        String filePath = pluginNode.path("file_path").asText();
+
+        // 下载接口公开:不带 token 调用,响应为 application/zip 文件流,Content-Disposition 携带 UTF-8 文件名
+        MvcResult dl = mockMvc.perform(post("/api/plugins/" + pluginId + "/download"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType("application/zip"))
+                .andExpect(header().string("Content-Disposition", containsString(name + "-v1.0.0.zip")))
+                .andReturn();
+        // 响应字节应与上传的 zip 完全一致(磁盘文件流原样输出)
+        assertArrayEquals(zip, dl.getResponse().getContentAsByteArray(), "下载内容应与上传 zip 一致");
+        // DB 复核下载数自增为 1
+        Integer count = jdbc.queryForObject("SELECT download_count FROM plugins WHERE id = ?", Integer.class, pluginId);
+        assertEquals(1, count, "下载后 download_count 应为 1");
+        // 清理磁盘测试文件(与 DB 清理解耦)
+        Files.deleteIfExists(Paths.get(filePath));
+    }
+
+    @Test
+    void favorite_toggle() throws Exception {
+        String token = register(PREFIX + "fav");
+        Long pluginId = createPlugin(testUserId, PREFIX + "fav_plug");
+
+        // 首次收藏 → favorited:true 且收藏数 1
+        mockMvc.perform(post("/api/plugins/" + pluginId + "/favorite").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.favorited").value(true))
+                .andExpect(jsonPath("$.favorite_count").value(1));
+        // 再收藏 → toggle 取消 → favorited:false 且收藏数归 0
+        mockMvc.perform(post("/api/plugins/" + pluginId + "/favorite").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.favorited").value(false))
+                .andExpect(jsonPath("$.favorite_count").value(0));
+        // DB 复核:无残留收藏记录
+        Integer favRows = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM plugin_favorites WHERE user_id = ? AND plugin_id = ?", Integer.class, testUserId, pluginId);
+        assertEquals(0, favRows, "toggle 取消后不应有收藏记录");
+    }
+
+    @Test
+    void delete_own_shouldSucceed() throws Exception {
+        String token = register(PREFIX + "del");
+        Long pluginId = createPlugin(testUserId, PREFIX + "del_plug");
+
+        // 作者删除 → {message:"Plugin deleted"}
+        mockMvc.perform(delete("/api/plugins/" + pluginId).header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Plugin deleted"));
+        // 再查 → 404
+        mockMvc.perform(get("/api/plugins/" + pluginId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Plugin not found"));
+    }
+
+    @Test
+    void delete_notOwner_should403() throws Exception {
+        register(PREFIX + "own");
+        Long pluginId = createPlugin(testUserId, PREFIX + "own_plug");
+        // 第二个用户(非作者)删除 → 403
+        String otherToken = register(PREFIX + "oth");
+        mockMvc.perform(delete("/api/plugins/" + pluginId).header("Authorization", "Bearer " + otherToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("You can only delete your own plugins"));
+        // 插件仍存在
+        mockMvc.perform(get("/api/plugins/" + pluginId))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void favoritesList_shouldReturnMine() throws Exception {
+        String token = register(PREFIX + "flist");
+        Long pluginId = createPlugin(testUserId, PREFIX + "flist_plug");
+
+        // 收藏后查询 → 列表含该插件(含 author)
+        mockMvc.perform(post("/api/plugins/" + pluginId + "/favorite").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/plugins/favorites/list").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.favorites").isArray())
+                .andExpect(jsonPath("$.favorites[0].name").value(PREFIX + "flist_plug"))
+                .andExpect(jsonPath("$.favorites[0].author.username").value(PREFIX + "flist"));
     }
 }

@@ -8,6 +8,8 @@ import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
+import java.util.List;
+
 /**
  * 插件收藏数据访问接口:查询/收藏/取消收藏/按插件清理
  */
@@ -30,4 +32,8 @@ public interface PluginFavoriteMapper {
     /** 按插件清理收藏(删除插件时级联清理) */
     @Delete("DELETE FROM plugin_favorites WHERE plugin_id = #{pluginId}")
     int deleteByPlugin(@Param("pluginId") Long pluginId);
+
+    /** 查询用户全部收藏(收藏列表用,按收藏时间倒序,镜像 Express findAll+order created_at DESC) */
+    @Select("SELECT * FROM plugin_favorites WHERE user_id = #{userId} ORDER BY created_at DESC")
+    List<PluginFavorite> listByUser(@Param("userId") Long userId);
 }

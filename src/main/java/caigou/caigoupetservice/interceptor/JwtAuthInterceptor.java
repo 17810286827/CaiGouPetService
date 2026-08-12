@@ -18,6 +18,7 @@ import java.io.IOException;
 /**
  * JWT 认证拦截器:对受保护接口校验 Authorization Bearer token
  * 校验通过后查库复核用户状态,并把当前用户写入 request attribute 供 controller 使用
+ * 标注 @PublicEndpoint 的方法(不限 HTTP 方法,如公开的 POST 下载)直接放行
  * 镜像 Express middleware/auth.js 的行为
  */
 @Component
@@ -37,8 +38,9 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         if (!(handler instanceof HandlerMethod)) {
             return true;
         }
-        // 公开只读 GET(@PublicEndpoint 注解)直接放行,镜像 Express 未加 authMiddleware 的公开路由
-        if (isPublicGet(request, (HandlerMethod) handler)) {
+        // 标注 @PublicEndpoint 的方法直接放行,镜像 Express 未挂 authMiddleware 的公开路由
+        // (不限 GET:POST /api/plugins/{id}/download 等公开写接口同样需要放行)
+        if (((HandlerMethod) handler).getMethod().isAnnotationPresent(PublicEndpoint.class)) {
             return true;
         }
         String header = request.getHeader("Authorization");
@@ -62,14 +64,6 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         request.setAttribute("currentUserId", user.getId());
         request.setAttribute("currentUser", UserView.from(user));
         return true;
-    }
-
-    /** GET + 方法标注 @PublicEndpoint 时放行(公开只读接口) */
-    private boolean isPublicGet(HttpServletRequest request, HandlerMethod handler) {
-        if (!"GET".equals(request.getMethod())) {
-            return false;
-        }
-        return handler.getMethod().isAnnotationPresent(PublicEndpoint.class);
     }
 
     /**
