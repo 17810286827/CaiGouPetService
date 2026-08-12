@@ -100,7 +100,7 @@ public class ChatService {
      */
     public List<ChatRoomView> listRooms(Long userId) {
         return chatRoomMapper.listByUserId(userId).stream()
-                .map(r -> ChatRoomView.from(r, lastMessage(r.getId())))
+                .map(r -> ChatRoomView.from(r, lastMessage(r.getId()), membersOf(r.getId())))
                 .toList();
     }
 
@@ -197,17 +197,18 @@ public class ChatService {
         if (chatRoomMemberMapper.find(roomId, userId) == null) {
             throw new ApiException(403, "不在该房间中");
         }
+        // members 同时作为房间视图内嵌字段与顶层数组(对齐 Express room.toJSON() 含 ChatRoomMember[])
+        List<Map<String, Object>> members = membersOf(roomId);
         return Map.of(
-                "room", ChatRoomView.from(chatRoomMapper.findById(roomId), null),
-                "members", chatRoomMemberMapper.listByRoom(roomId).stream()
-                        .map(this::memberView).toList());
+                "room", ChatRoomView.from(chatRoomMapper.findById(roomId), null, members),
+                "members", members);
     }
 
     /**
      * 组装成员视图 Map:对齐 Express ChatRoomMember 含内嵌 User 的 snake_case 结构
-     * 扁平 UserView 会导致前端私聊名退化为「私聊」且 role 丢失,故按成员字段 + user 内嵌返回
+     * 内嵌键必须为大写 User(Sequelize 默认别名=模型名),前端 chatlist.js 读 other.User;小写会导致私聊名退化
      * @param m 成员实体
-     * @return {id, room_id, user_id, role, last_read_msg_id, created_at, user}
+     * @return {id, room_id, user_id, role, last_read_msg_id, created_at, User}
      */
     private Map<String, Object> memberView(ChatRoomMember m) {
         Map<String, Object> map = new LinkedHashMap<>();
@@ -219,9 +220,19 @@ public class ChatService {
         map.put("created_at", m.getCreatedAt());
         UserView u = userView(m.getUserId());
         if (u != null) {
-            map.put("user", u);
+            map.put("User", u);
         }
         return map;
+    }
+
+    /**
+     * 查询房间全部成员的视图 Map 列表(每项含大写 User 内嵌)
+     * @param roomId 聊天室ID
+     * @return 成员视图列表
+     */
+    private List<Map<String, Object>> membersOf(Long roomId) {
+        return chatRoomMemberMapper.listByRoom(roomId).stream()
+                .map(this::memberView).toList();
     }
 
     /**

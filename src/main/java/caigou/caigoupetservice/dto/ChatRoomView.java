@@ -6,6 +6,7 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -32,16 +33,29 @@ public class ChatRoomView {
     private String updated_at;
     /** 最后一条消息(可空;无消息为 null,序列化时保留字段) */
     private Map<String, Object> last_message;
+    /** 房间成员列表(可空;每项含大写 User 内嵌,对齐 Express room.toJSON() 的 ChatRoomMember[]) */
+    private List<Map<String, Object>> members;
 
     /**
-     * 从实体构造视图:last_message 由消息实体转为下划线 Map,无消息时为 null
+     * 从实体构造视图(不含成员):成员字段为 null
      * @param room    聊天室实体
      * @param lastMsg 最后一条消息(可空)
      * @return 聊天室视图
      */
     public static ChatRoomView from(ChatRoom room, Message lastMsg) {
+        return from(room, lastMsg, null);
+    }
+
+    /**
+     * 从实体构造视图,含成员列表(前端 chatlist.js 依赖 room.members 计算私聊名)
+     * @param room    聊天室实体
+     * @param lastMsg 最后一条消息(可空)
+     * @param members 成员视图 Map 列表(每项含大写 User 内嵌)
+     * @return 聊天室视图
+     */
+    public static ChatRoomView from(ChatRoom room, Message lastMsg, List<Map<String, Object>> members) {
         return new ChatRoomView(room.getId(), room.getType(), room.getName(), room.getAvatarUrl(),
-                room.getCreatedBy(), room.getCreatedAt(), room.getUpdatedAt(), toMessageMap(lastMsg));
+                room.getCreatedBy(), room.getCreatedAt(), room.getUpdatedAt(), toMessageMap(lastMsg), members);
     }
 
     /**

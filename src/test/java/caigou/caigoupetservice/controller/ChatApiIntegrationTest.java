@@ -136,6 +136,9 @@ class ChatApiIntegrationTest {
                 found = true;
                 assertEquals(1, room.get("type").asInt(), "列表房间 type 应为 1");
                 assertTrue(room.has("last_message"), "列表中的房间应含 last_message 字段(可空)");
+                assertTrue(room.has("members") && room.get("members").size() == 2,
+                        "列表房间应含 members(私聊 2 人,前端 chatlist 用它算私聊名)");
+                assertTrue(room.get("members").get(0).has("User"), "成员应内嵌大写 User(对齐 Express)");
             }
         }
         assertTrue(found, "当前用户房间列表应包含刚创建的房间");
@@ -265,6 +268,6 @@ class ChatApiIntegrationTest {
         assertEquals(2, members.size(), "私聊房间应返回 2 个成员");
         JsonNode first = members.get(0);
         assertTrue(first.has("user_id") && first.has("role"), "成员应含 user_id 与 role(对齐 Express)");
-        assertTrue(first.has("user") && first.get("user").has("username"), "成员应内嵌 user 用户信息");
+        assertTrue(first.has("User") && first.get("User").has("username"), "成员应内嵌大写 User(对齐 Sequelize 别名/前端 chatlist)");
     }
 }
