@@ -5,6 +5,7 @@ import caigou.caigoupetservice.mapper.PetStateMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -44,8 +45,15 @@ public class PetService {
             state.setUserId(userId);
             state.setEmotionState(EMPTY_JSON);
             state.setPersonality(EMPTY_JSON);
-            petStateMapper.insert(state);
-            log.info("[pet] 无状态记录,默认创建 userId={}", userId);
+            try {
+                petStateMapper.insert(state);
+                log.info("[pet] 无状态记录,默认创建 userId={}", userId);
+            } catch (DuplicateKeyException e) {
+                // 并发首访竞态:两请求同时查 null 后都 insert,后一个撞 uk_user 唯一键;
+                // 幂等兜底——重查返回已存在行,避免 GlobalExceptionHandler 兜底 500(对齐 like/favorite 模式)
+                state = petStateMapper.findByUserId(userId);
+                log.info("[pet] 并发首访撞唯一键,复用已存在状态 userId={}", userId);
+            }
         }
         // insert 只回填自增 id,回查补 DB 维护的 created_at/updated_at,对齐 Express 完整响应
         return Map.of("pet_state", petStateView(petStateMapper.findByUserId(userId)));
@@ -69,25 +77,46 @@ public class PetService {
             state.setEmotionState(toJson(emotionRaw, EMPTY_JSON));
             state.setPersonality(toJson(personalityRaw, EMPTY_JSON));
             state.setLastSyncAt(now());
-            petStateMapper.insert(state);
-            log.info("[pet] 首次同步,创建状态 userId={}", userId);
+            try {
+                petStateMapper.insert(state);
+                log.info("[pet] 首次同步,创建状态 userId={}", userId);
+            } catch (DuplicateKeyException e) {
+                // 并发首访竞态:撞 uk_user 唯一键,重查已存在行后按部分更新应用本次传入字段,
+                // 避免 500 且保证本次同步值不丢失(幂等 upsert)
+                state = petStateMapper.findByUserId(userId);
+                applyPartialUpdate(state, emotionRaw, personalityRaw);
+                state.setLastSyncAt(now());
+                petStateMapper.update(state);
+                log.info("[pet] 首次同步撞唯一键,复用并更新已有状态 userId={}", userId);
+            }
         } else {
             // 部分更新:先查现有记录,仅覆盖传入的非空字段,避免 update 全量覆盖清空未传字段
-            String emotionJson = toJson(emotionRaw, null);
-            if (emotionJson != null) {
-                state.setEmotionState(emotionJson);
-            }
-            String personalityJson = toJson(personalityRaw, null);
-            if (personalityJson != null) {
-                state.setPersonality(personalityJson);
-            }
+            applyPartialUpdate(state, emotionRaw, personalityRaw);
             state.setLastSyncAt(now());
             petStateMapper.update(state);
             log.info("[pet] 同步状态 userId={}, 更新emotion={}, 更新personality={}",
-                    userId, emotionJson != null, personalityJson != null);
+                    userId, emotionRaw != null, personalityRaw != null);
         }
         // 回查 DB 维护的时间字段(created_at/updated_at),对齐 Express 响应
         return Map.of("pet_state", petStateView(petStateMapper.findByUserId(userId)));
+    }
+
+    /**
+     * 部分更新宠物状态:仅覆盖传入的非空字段,未传字段保留旧值
+     * (规避 PetStateMapper.update 全量覆盖:只传 emotion 时不清空 personality)
+     * @param state         已从 DB 查出的现有记录(必非 null)
+     * @param emotionRaw     情绪原始值(可为 Map/JSON 字符串/空白,空则保留旧值)
+     * @param personalityRaw 性格原始值(可为 Map/JSON 字符串/空白,空则保留旧值)
+     */
+    private void applyPartialUpdate(PetState state, Object emotionRaw, Object personalityRaw) {
+        String emotionJson = toJson(emotionRaw, null);
+        if (emotionJson != null) {
+            state.setEmotionState(emotionJson);
+        }
+        String personalityJson = toJson(personalityRaw, null);
+        if (personalityJson != null) {
+            state.setPersonality(personalityJson);
+        }
     }
 
     /**
