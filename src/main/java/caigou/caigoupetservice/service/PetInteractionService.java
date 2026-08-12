@@ -70,11 +70,12 @@ public class PetInteractionService {
     /**
      * 解析串门允许结果:房间级覆盖优先,其次全局设置(默认允许)
      * 对齐 Express resolveAllow:roomOverride 非空直接取其值,否则 global !== false
+     * static 供 PetService 复用(串门设置查询对方允许状态与互动动作共用同一规则)
      * @param global 全局允许(未设置时 null)
      * @param roomOverride 房间级覆盖(未设置时 null)
      * @return true=允许串门
      */
-    public boolean resolveAllow(Boolean global, Boolean roomOverride) {
+    public static boolean resolveAllow(Boolean global, Boolean roomOverride) {
         if (roomOverride != null) {
             return roomOverride;
         }

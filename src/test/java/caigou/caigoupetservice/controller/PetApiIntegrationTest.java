@@ -11,6 +11,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -39,8 +41,17 @@ class PetApiIntegrationTest {
 
     @AfterEach
     void cleanUp() {
-        // 先删宠物状态(子表语义)再删测试用户;表无外键约束,顺序仅为语义清晰
+        // 先删子表(宠物状态/串门设置/消息/成员)再删主表(房间/用户);表无外键约束,顺序仅为语义清晰
         jdbc.update("DELETE FROM pet_states WHERE user_id IN " +
+                "(SELECT id FROM users WHERE username LIKE '" + PREFIX + "%')");
+        jdbc.update("DELETE FROM pet_visit_settings WHERE user_id IN " +
+                "(SELECT id FROM users WHERE username LIKE '" + PREFIX + "%')");
+        jdbc.update("DELETE FROM messages WHERE room_id IN " +
+                "(SELECT room_id FROM chat_room_members WHERE user_id IN " +
+                "(SELECT id FROM users WHERE username LIKE '" + PREFIX + "%'))");
+        jdbc.update("DELETE FROM chat_room_members WHERE user_id IN " +
+                "(SELECT id FROM users WHERE username LIKE '" + PREFIX + "%')");
+        jdbc.update("DELETE FROM chat_rooms WHERE created_by IN " +
                 "(SELECT id FROM users WHERE username LIKE '" + PREFIX + "%')");
         jdbc.update("DELETE FROM users WHERE username LIKE '" + PREFIX + "%'");
     }
@@ -63,6 +74,14 @@ class PetApiIntegrationTest {
         return mockMvc.perform(put("/api/pet/sync").header("Authorization", "Bearer " + token)
                         .contentType("application/json")
                         .content(OM.writeValueAsString(body)))
+                .andReturn();
+    }
+
+    /** A 创建与 otherId 的私聊房间(type=1,任务5已实现),供串门设置房间级用例建房间 */
+    private MvcResult createPrivateRoom(String tokenA, Long otherId) throws Exception {
+        return mockMvc.perform(post("/api/chat/rooms").header("Authorization", "Bearer " + tokenA)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(Map.of("type", 1, "member_ids", List.of(otherId)))))
                 .andReturn();
     }
 
@@ -121,5 +140,91 @@ class PetApiIntegrationTest {
         JsonNode ps = OM.readTree(r.getResponse().getContentAsString()).get("pet_state");
         assertEquals(0.9, ps.get("emotion_state").get("joy").asDouble(), "emotion.joy 应更新为 0.9");
         assertEquals(1, ps.get("personality").get("happy").asInt(), "只传 emotion 时 personality 应保留");
+    }
+
+    @Test
+    void visitSettings_global_shouldReturnSettings() throws Exception {
+        // 新用户默认全局允许:GET settings.global=true 且 rooms 为空;PUT {allow:false} → {global:false};GET 再查回落为 false
+        String token = register(PREFIX + "g2");
+        MvcResult initial = mockMvc.perform(get("/api/pet/visit-settings").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andReturn();
+        JsonNode initSettings = OM.readTree(initial.getResponse().getContentAsString()).get("settings");
+        assertEquals(true, initSettings.get("global").asBoolean(), "新用户默认全局允许应为 true");
+        assertTrue(initSettings.get("rooms").isArray() && initSettings.get("rooms").size() == 0,
+                "新用户房间覆盖列表应为空数组");
+
+        MvcResult put = mockMvc.perform(put("/api/pet/visit-settings").header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(Map.of("allow", false))))
+                .andExpect(status().isOk()).andReturn();
+        assertEquals(false, OM.readTree(put.getResponse().getContentAsString()).get("global").asBoolean(),
+                "PUT 全局 allow=false 应返回 {global:false}");
+
+        MvcResult after = mockMvc.perform(get("/api/pet/visit-settings").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andReturn();
+        assertEquals(false, OM.readTree(after.getResponse().getContentAsString()).get("settings").get("global").asBoolean(),
+                "PUT false 后 GET settings.global 应为 false");
+    }
+
+    @Test
+    void visitSettings_room_shouldUpsertAndDelete() throws Exception {
+        // A 建与 B 的私聊房间;B 对房间设置 allow=false → A 查对方 other_allow=false;B 删除覆盖(null) → A 再查回落 true
+        String tokenA = register(PREFIX + "rA1");
+        String tokenB = register(PREFIX + "rB1");
+        Long bId = userId(PREFIX + "rB1");
+        MvcResult created = createPrivateRoom(tokenA, bId);
+        assertEquals(201, created.getResponse().getStatus(), "前置:创建私聊房间应 201");
+        long roomId = OM.readTree(created.getResponse().getContentAsString()).get("room").get("id").asLong();
+
+        // B 设置房间级覆盖 allow=false → {room_id, allow:false}
+        MvcResult bPut = mockMvc.perform(put("/api/pet/visit-settings/room/" + roomId)
+                        .header("Authorization", "Bearer " + tokenB)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(Map.of("allow", false))))
+                .andExpect(status().isOk()).andReturn();
+        JsonNode bResp = OM.readTree(bPut.getResponse().getContentAsString());
+        assertEquals(roomId, bResp.get("room_id").asLong(), "房间覆盖响应应回显 room_id");
+        assertEquals(false, bResp.get("allow").asBoolean(), "房间覆盖响应应回显 allow=false");
+
+        // A 带 room_id 查对方(B)的有效允许状态 → other_allow=false(房间覆盖优先)
+        MvcResult aGet = mockMvc.perform(get("/api/pet/visit-settings").param("room_id", String.valueOf(roomId))
+                        .header("Authorization", "Bearer " + tokenA))
+                .andExpect(status().isOk()).andReturn();
+        assertEquals(false, OM.readTree(aGet.getResponse().getContentAsString()).get("other_allow").asBoolean(),
+                "B 设置房间覆盖 false 后,A 查对方 other_allow 应为 false");
+
+        // B 删除房间覆盖(allow=null) → 回落全局(默认 true)
+        Map<String, Object> deleteBody = new HashMap<>();
+        deleteBody.put("allow", null);
+        mockMvc.perform(put("/api/pet/visit-settings/room/" + roomId)
+                        .header("Authorization", "Bearer " + tokenB)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(deleteBody)))
+                .andExpect(status().isOk());
+        MvcResult aGet2 = mockMvc.perform(get("/api/pet/visit-settings").param("room_id", String.valueOf(roomId))
+                        .header("Authorization", "Bearer " + tokenA))
+                .andExpect(status().isOk()).andReturn();
+        assertEquals(true, OM.readTree(aGet2.getResponse().getContentAsString()).get("other_allow").asBoolean(),
+                "B 删除房间覆盖后,A 查对方 other_allow 应回落为 true");
+    }
+
+    @Test
+    void visitSettings_room_notMember_should403() throws Exception {
+        // C 非该房间成员对房间设置覆盖 → 403「不在该房间中」
+        String tokenA = register(PREFIX + "nA1");
+        register(PREFIX + "nB1");
+        String tokenC = register(PREFIX + "nC1");
+        Long bId = userId(PREFIX + "nB1");
+        MvcResult created = createPrivateRoom(tokenA, bId);
+        assertEquals(201, created.getResponse().getStatus(), "前置:创建私聊房间应 201");
+        long roomId = OM.readTree(created.getResponse().getContentAsString()).get("room").get("id").asLong();
+
+        MvcResult r = mockMvc.perform(put("/api/pet/visit-settings/room/" + roomId)
+                        .header("Authorization", "Bearer " + tokenC)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(Map.of("allow", false))))
+                .andExpect(status().isForbidden()).andReturn();
+        assertEquals("不在该房间中", OM.readTree(r.getResponse().getContentAsString()).get("error").asText(),
+                "非成员设置房间覆盖应返回 403「不在该房间中」");
     }
 }
