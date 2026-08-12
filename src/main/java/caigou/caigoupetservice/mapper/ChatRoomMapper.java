@@ -25,9 +25,13 @@ public interface ChatRoomMapper {
     @Select("SELECT * FROM chat_rooms WHERE id = #{id}")
     ChatRoom findById(@Param("id") Long id);
 
-    /** 私聊幂等:查已存在 type=1 且含指定成员 + 创建者为我 的房间(双方成员各 JOIN 一次,避免一方缺失) */
+    /**
+     * 私聊幂等:查已存在 type=1 且同时含请求双方成员的房间(不要求当前用户是创建者)
+     * 对齐 Express chat.js 双向幂等——任何一方再发起私聊都复用同一房间
+     * m1.user_id<>m2.user_id 防自匹配(同一个人同时出现在两个 JOIN 中)
+     */
     @Select("SELECT DISTINCT cr.* FROM chat_rooms cr JOIN chat_room_members m1 ON m1.room_id=cr.id JOIN chat_room_members m2 ON m2.room_id=cr.id " +
-            "WHERE cr.type=1 AND cr.created_by=#{creatorId} AND m1.user_id=#{creatorId} AND m2.user_id=#{otherId} LIMIT 1")
+            "WHERE cr.type=1 AND m1.user_id=#{creatorId} AND m2.user_id=#{otherId} AND m1.user_id<>m2.user_id LIMIT 1")
     ChatRoom findPrivateRoom(@Param("creatorId") Long creatorId, @Param("otherId") Long otherId);
 
     /** 按用户列出其参与的全部房间,按更新时间倒序 */

@@ -22,7 +22,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * chat 房间模块集成测试:创建私聊(201)/私聊幂等复用(200)/当前用户房间列表
+ * chat 房间模块集成测试:创建私聊(201)/私聊双向幂等复用(200,含反向)/当前用户房间列表
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -97,6 +97,22 @@ class ChatApiIntegrationTest {
         assertEquals(200, second.getResponse().getStatus(), "重复创建私聊应返回 200 表示复用");
         long reusedRoomId = OM.readTree(second.getResponse().getContentAsString()).get("room").get("id").asLong();
         assertEquals(roomId, reusedRoomId, "重复创建私聊应复用同一房间 id");
+    }
+
+    @Test
+    void createRoom_private_reverse_shouldReuse() throws Exception {
+        // 反向幂等:A 创建与 B 的私聊后,B 用自己的 token 再发起与 A 的私聊,应复用同一房间(200 而非 201)
+        String tokenA = register(PREFIX + "a4");
+        String tokenB = register(PREFIX + "b4");
+        Long aId = userId(PREFIX + "a4");
+        Long bId = userId(PREFIX + "b4");
+        MvcResult first = createPrivateRoom(tokenA, bId);
+        assertEquals(201, first.getResponse().getStatus(), "A 首次创建私聊应为 201");
+        long roomId = OM.readTree(first.getResponse().getContentAsString()).get("room").get("id").asLong();
+        MvcResult reverse = createPrivateRoom(tokenB, aId);
+        assertEquals(200, reverse.getResponse().getStatus(), "B 反向发起私聊应返回 200 表示复用");
+        long reverseRoomId = OM.readTree(reverse.getResponse().getContentAsString()).get("room").get("id").asLong();
+        assertEquals(roomId, reverseRoomId, "B 反向发起私聊应复用同一房间 id");
     }
 
     @Test
