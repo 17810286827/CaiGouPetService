@@ -5,6 +5,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.Map;
 
@@ -30,6 +31,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<Map<String, String>> handleMaxUpload(MaxUploadSizeExceededException e) {
         return ResponseEntity.status(413).body(Map.of("error", "文件大小超出限制"));
+    }
+
+    /**
+     * 请求不存在接口(未迁移模块路径打到 Java):Spring 找不到 controller 抛
+     * NoResourceFoundException,契约返回 404 + {error},而非走兜底 500 刷 ERROR 堆栈
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, String>> handleNoResource(NoResourceFoundException e) {
+        return ResponseEntity.status(404).body(Map.of("error", "接口不存在"));
     }
 
     /**
