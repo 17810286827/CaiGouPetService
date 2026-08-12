@@ -151,6 +151,10 @@ public class PluginService {
         } catch (IOException e) {
             throw new ApiException(400, "manifest.json is not valid JSON");
         }
+        // readTree 对空串/纯空白输入返回 MissingNode 而不抛异常,需显式判定走 400(对齐 Express JSON.parse 抛错口径)
+        if (manifest.isMissingNode()) {
+            throw new ApiException(400, "manifest.json is not valid JSON");
+        }
 
         // 完整校验(必填字段/entry/文件白名单/内容安全):失败带 details+warnings 返回 400
         PluginValidator.Result validation = PluginValidator.validate(manifest, zip.getFiles());

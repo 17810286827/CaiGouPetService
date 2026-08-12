@@ -86,10 +86,11 @@ public final class PluginValidator {
             return new Result(false, errors, warnings);
         }
 
-        // 必填字段:值为空(null/缺失/空白字符串)记 Missing required field(镜像 JS !manifest[field] 假值语义)
+        // 必填字段:缺失/null/空串记 Missing required field(镜像 JS !manifest[field] 假值语义;
+        // 注意仅空串视为缺失,纯空白字符串在 JS 中为 truthy,不算缺失)
         for (String field : REQUIRED_MANIFEST_FIELDS) {
             JsonNode v = manifest.get(field);
-            if (v == null || v.isNull() || (v.isValueNode() && v.asText("").isBlank())) {
+            if (v == null || v.isNull() || (v.isValueNode() && v.asText("").isEmpty())) {
                 errors.add("Missing required field: \"" + field + "\"");
             }
         }

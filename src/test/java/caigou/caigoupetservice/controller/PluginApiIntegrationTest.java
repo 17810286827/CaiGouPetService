@@ -214,6 +214,20 @@ class PluginApiIntegrationTest {
     }
 
     @Test
+    void upload_blankManifest_should400() throws Exception {
+        String token = register(PREFIX + "up4");
+        // manifest.json 内容为纯空白:JSON.parse 抛错 → 400 "manifest.json is not valid JSON"
+        // (Jackson readTree 对空白输入返回 MissingNode,需显式判定,否则会误落到 validator 校验失败分支)
+        byte[] zip = zipOf(Map.of(
+                "manifest.json", "   ".getBytes(StandardCharsets.UTF_8),
+                "index.html", "<html></html>".getBytes(StandardCharsets.UTF_8)));
+        MockMultipartFile file = new MockMultipartFile("file", "p.zip", "application/zip", zip);
+        mockMvc.perform(multipart("/api/plugins/upload").file(file).header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("manifest.json is not valid JSON"));
+    }
+
+    @Test
     void upload_validZip_should201() throws Exception {
         String token = register(PREFIX + "up2");
         // 合法 manifest(对齐 REQUIRED_MANIFEST_FIELDS)+ entry 引用的 index.html 真实文件 → 201 新建
