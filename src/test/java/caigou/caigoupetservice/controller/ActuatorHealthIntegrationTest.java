@@ -19,6 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class ActuatorHealthIntegrationTest {
 
+    // MockMvc:用于无端口调用 Actuator 端点
     @Autowired
     private MockMvc mockMvc;
 
