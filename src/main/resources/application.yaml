@@ -35,3 +35,10 @@ server:
 # 文件上传存储目录(Task 3 经 @Value("${upload.dir}") 注入)
 upload:
   dir: ${UPLOAD_DIR:./uploads}
+
+# Actuator 监控:健康检查 + JVM 指标(替代已下线的 Express admin 面板)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
