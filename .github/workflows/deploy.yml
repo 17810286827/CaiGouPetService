@@ -2,16 +2,16 @@
 # CaiGouPetService — GitHub Actions CI/CD 工作流
 #
 # 触发方式:
-#   - push 到 main / master        → 完整 CI（GitHub 托管 runner 编译打包）+ 部署（自托管 runner 执行）
+#   - push 到 main / master        → 完整 CI（编译 + 构建 Docker 镜像）+ 部署（自托管 runner 执行）
 #   - pull_request 到 main / master → 仅 CI（编译）
 #
 # 部署原理:
-#   CI 在 GitHub 托管 runner 上编译代码并打包成 JAR, 上传为 artifact.
-#   自托管 runner 在云服务器本地下载 JAR, 直接 java -jar 启动.
-#   无需 Docker 构建, 不受镜像拉取慢的限制.
+#   CI 在 GitHub 托管 runner 上编译代码, 构建 Docker 镜像, 打包为 tar 上传 artifact.
+#   自托管 runner 在云服务器本地下载镜像 tar, 用 docker load 导入, 然后 docker compose up.
+#   服务器无需从 Docker Hub 拉取 base 镜像, 不受镜像源慢的限制.
 #
 # 前置条件 (云服务器上执行一次):
-#   1. 安装 Java 21 JRE
+#   1. 安装 Docker + docker-compose 插件（已装好）
 #   2. 安装 git（已装好）
 #   3. 创建 /opt/CaiGouPetService 目录并授权给 runner 用户（已做）
 #   4. 在 GitHub Secrets 中配置 DB_PASS / JWT_SECRET
@@ -29,10 +29,10 @@ on:
 
 jobs:
   # ===========================================================================
-  # 任务 1: CI — 编译打包 (PR 与 push 都会执行)
+  # 任务 1: CI — 编译打包 + 构建 Docker 镜像
   # ===========================================================================
   ci:
-    name: CI — 编译打包
+    name: CI — 编译 + Docker 构建
     runs-on: ubuntu-22.04
 
     steps:
@@ -53,16 +53,30 @@ jobs:
           chmod +x mvnw
           ./mvnw -B clean package -DskipTests
 
-      - name: 上传 JAR 包为 artifact
+      - name: 设置 Docker 元数据
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: caigou-pet-service
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=raw,value=latest
+
+      - name: 构建 Docker 镜像
+        run: |
+          docker build -t caigou-pet-service:latest .
+          # 保存镜像为 tar 文件（压缩以减小体积）
+          docker save caigou-pet-service:latest | gzip > caigou-pet-service.tar.gz
+
+      - name: 上传 Docker 镜像为 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-jar
-          path: target/*.jar
-          # 只保留最近一次构建的 JAR, 避免磁盘占用
+          name: docker-image
+          path: caigou-pet-service.tar.gz
           retention-days: 1
 
   # ===========================================================================
-  # 任务 2: 部署 — 云服务器自托管 runner 执行, 依赖 CI 先通过
+  # 任务 2: 部署 — 云服务器自托管 runner 执行
   # ===========================================================================
   deploy:
     name: 部署到云服务器
@@ -82,14 +96,26 @@ jobs:
       APP_DIR: ${{ secrets.APP_DIR || '/opt/CaiGouPetService' }}
 
     steps:
-      # 从 GitHub Actions 下载之前 CI 构建好的 JAR 包
-      - name: 下载 JAR 包
+      - name: 下载 Docker 镜像
         uses: actions/download-artifact@v4
         with:
-          name: app-jar
+          name: docker-image
           path: ${{ env.APP_DIR }}
 
-      - name: 停止旧服务并启动新服务
+      - name: 拉取最新代码
+        # 需要 docker-compose.yml 和 .env.example 等文件
+        run: |
+          if [ ! -d "$APP_DIR/.git" ]; then
+            echo "首次部署: 克隆仓库"
+            mkdir -p "$(dirname "$APP_DIR")"
+            git clone "https://github.com/${{ github.repository }}.git" "$APP_DIR"
+          fi
+          cd "$APP_DIR"
+          git fetch --prune origin
+          git checkout "${{ github.ref_name }}"
+          git pull --ff-only origin "${{ github.ref_name }}"
+
+      - name: 加载 Docker 镜像并启动服务
         run: |
           set -e
           echo "=========================================="
@@ -98,27 +124,20 @@ jobs:
 
           cd "$APP_DIR"
 
-          # 确保数据目录存在
-          mkdir -p uploads logs
-
-          # 创建 .env (来自仓库 .env.example; 真实密钥由 GitHub Secrets 注入)
-          # 先拉取 .env.example 文件（从仓库下载或从该目录读取）
-          if [ -f "$APP_DIR/.env.example" ]; then
-            echo "从本地 .env.example 生成 .env"
-            cp .env.example .env 2>/dev/null || true
+          # 加载 CI 构建好的 Docker 镜像
+          if [ -f caigou-pet-service.tar.gz ]; then
+            echo "加载 Docker 镜像..."
+            gunzip -c caigou-pet-service.tar.gz | docker load
+            rm -f caigou-pet-service.tar.gz
           else
-            # 如果本地没有（首次部署可能没有 git clone），先 clone 一次
-            if [ ! -d "$APP_DIR/.git" ]; then
-              echo "首次部署: 克隆仓库获取 .env.example"
-              git clone "https://github.com/${{ github.repository }}.git" "$APP_DIR" 2>/dev/null || true
-              cd "$APP_DIR"
-            fi
-            if [ -f .env.example ]; then
-              cp .env.example .env 2>/dev/null || true
-            fi
+            echo "未找到镜像 tar 文件, 将使用本地构建"
           fi
 
-          # 覆写敏感密钥: 先删除旧行再追加
+          # 创建 .env (来自仓库 .env.example; 真实密钥由 GitHub Secrets 注入)
+          if [ -f .env.example ]; then
+            cp .env.example .env 2>/dev/null || true
+          fi
+          # 覆写敏感密钥
           if [ -f .env ]; then
             grep -v '^DB_PASS=' .env > .env.tmp || true
             echo "DB_PASS=\"${DB_PASS}\"" >> .env.tmp
@@ -130,56 +149,28 @@ jobs:
             echo "JWT_SECRET=\"${JWT_SECRET}\"" >> .env
           fi
 
-          # 加载 .env 到环境变量
-          set -a
-          source .env
-          set +a
+          # 使用 docker-compose.yml 启动服务
+          # 注意: 使用本地已加载的镜像, 不从远程拉取
+          docker compose down --remove-orphans
+          docker compose up -d --force-recreate
 
-          # 查找旧的 Java 进程并停止
-          OLD_PID=$(pgrep -f "caiGouPetService" 2>/dev/null || true)
-          if [ -n "$OLD_PID" ]; then
-            echo "停止旧服务 (PID: $OLD_PID)"
-            kill "$OLD_PID" 2>/dev/null || true
-            # 等待进程退出（最多 10 秒）
-            for i in $(seq 1 10); do
-              if ! kill -0 "$OLD_PID" 2>/dev/null; then
-                break
-              fi
-              sleep 1
-            done
-            # 强制终止
-            kill -9 "$OLD_PID" 2>/dev/null || true
-          fi
+          # 清理悬空镜像
+          docker image prune -f >/dev/null 2>&1 || true
 
-          # 找到下载的 JAR 文件
-          JAR_FILE=$(ls -t *.jar 2>/dev/null | head -1)
-          if [ -z "$JAR_FILE" ]; then
-            echo "错误: 未找到 JAR 文件"
-            exit 1
-          fi
-          echo "找到 JAR 文件: $JAR_FILE"
-
-          # 启动新服务(后台运行, 输出日志到 logs/ 目录)
-          nohup java -jar "$JAR_FILE" \
-            --server.port=3000 \
-            > "$APP_DIR/logs/application.log" 2>&1 &
-          NEW_PID=$!
-          echo "新服务已启动 (PID: $NEW_PID)"
-
-          # 健康检查: 等待服务启动
+          # 健康检查
           echo "等待服务启动..."
           for i in $(seq 1 12); do
             sleep 5
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-              "http://localhost:3000/actuator/health" 2>/dev/null || echo "000")
+              "http://localhost:${{ vars.APP_PORT || '3000' }}/actuator/health" 2>/dev/null || echo "000")
             if [ "$HTTP_CODE" = "200" ]; then
-              echo "部署成功: 健康检查通过 (HTTP $HTTP_CODE, PID: $NEW_PID)"
+              echo "部署成功: 健康检查通过 (HTTP $HTTP_CODE)"
               exit 0
             fi
             echo "  尝试 $i/12: HTTP $HTTP_CODE"
           done
 
-          echo "警告: 健康检查超时, 请查看日志: tail -f $APP_DIR/logs/application.log"
+          echo "警告: 健康检查超时, 请查看容器日志: docker compose logs"
           exit 1
 
   # ===========================================================================
