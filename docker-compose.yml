@@ -4,6 +4,7 @@ services:
     image: crpi-da59qcl73m93max2.cn-beijing.personal.cr.aliyuncs.com/caigoupet/caigou-pet-service:latest
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
+      - "${SOCKET_PORT:-3001}:${SOCKET_PORT:-3001}"
     environment:
       PORT: ${PORT:-3000}
       DB_URL: ${DB_URL:-jdbc:mysql://47.94.240.159:3306/caigoupet?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
@@ -14,6 +15,9 @@ services:
       UPLOAD_DIR: /app/uploads
       LOG_PATH: /app/logs
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SOCKET_ENABLED: ${SOCKET_ENABLED:-true}
+      CAIGOPET_SOCKET_HOST: 0.0.0.0
+      CAIGOPET_SOCKET_PORT: ${SOCKET_PORT:-3001}
     volumes:
       - ./uploads:/app/uploads
       - ./logs:/app/logs

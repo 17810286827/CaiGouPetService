@@ -55,8 +55,8 @@ public class SocketConfig {
     public SocketIOServer socketIOServer() {
         com.corundumstudio.socketio.Configuration config =
                 new com.corundumstudio.socketio.Configuration();
-        // 监听 localhost:3001(可用 CAIGOPET_SOCKET_PORT 覆盖),与 REST 3000 解耦
-        config.setHostname("localhost");
+        // 监听所有网卡，允许远程桌面客户端连接；端口可通过环境变量覆盖。
+        config.setHostname(System.getenv().getOrDefault("CAIGOPET_SOCKET_HOST", "0.0.0.0"));
         config.setPort(Integer.parseInt(System.getenv().getOrDefault("CAIGOPET_SOCKET_PORT", "3001")));
         config.setAuthorizationListener(data -> {
             String token = resolveToken(data);
