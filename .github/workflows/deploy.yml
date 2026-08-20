@@ -2,18 +2,19 @@
 # CaiGouPetService — GitHub Actions CI/CD 工作流
 #
 # 触发方式:
-#   - push 到 main / master        → 完整 CI（GitHub 托管 runner 编译）+ 部署（自托管 runner 执行）
+#   - push 到 main / master        → 完整 CI（GitHub 托管 runner 编译打包）+ 部署（自托管 runner 执行）
 #   - pull_request 到 main / master → 仅 CI（编译）
 #
 # 部署原理:
-#   在云服务器上安装 GitHub Actions 自托管 runner, 提交代码后 runner 自动触发,
-#   在服务器本地执行 git pull + docker compose up --build, 不走 SSH.
-#   不受海外 runner 网络超时限制, 无需 Docker Hub 账号.
+#   CI 在 GitHub 托管 runner 上编译代码并打包成 JAR, 上传为 artifact.
+#   自托管 runner 在云服务器本地下载 JAR, 直接 java -jar 启动.
+#   无需 Docker 构建, 不受镜像拉取慢的限制.
 #
 # 前置条件 (云服务器上执行一次):
-#   1. 安装 Docker 与 docker-compose 插件
-#   2. 安装 GitHub Actions 自托管 runner (详见 README)
-#   3. 在 GitHub Secrets 中配置 DB_PASS / JWT_SECRET
+#   1. 安装 Java 21 JRE
+#   2. 安装 git（已装好）
+#   3. 创建 /opt/CaiGouPetService 目录并授权给 runner 用户（已做）
+#   4. 在 GitHub Secrets 中配置 DB_PASS / JWT_SECRET
 # =============================================================================
 
 name: CI/CD — Build, Test & Deploy
@@ -28,10 +29,10 @@ on:
 
 jobs:
   # ===========================================================================
-  # 任务 1: CI — 编译 (PR 与 push 都会执行)
+  # 任务 1: CI — 编译打包 (PR 与 push 都会执行)
   # ===========================================================================
   ci:
-    name: CI — 编译
+    name: CI — 编译打包
     runs-on: ubuntu-22.04
 
     steps:
@@ -45,20 +46,26 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: 编译（跳过测试，测试需连接真实数据库，不在 CI 环境运行）
-        # CI 环境无 MySQL 数据库可连，此处只编译验证代码语法
-        # 集成测试在本地开发环境运行，部署后靠 /actuator/health 验证
+      - name: 编译打包（跳过测试）
+        # CI 环境无 MySQL 数据库可连, 只编译打包
+        # 集成测试在本地开发环境运行, 部署后靠 /actuator/health 验证
         run: |
           chmod +x mvnw
-          ./mvnw -B clean compile
+          ./mvnw -B clean package -DskipTests
+
+      - name: 上传 JAR 包为 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/*.jar
+          # 只保留最近一次构建的 JAR, 避免磁盘占用
+          retention-days: 1
 
   # ===========================================================================
   # 任务 2: 部署 — 云服务器自托管 runner 执行, 依赖 CI 先通过
   # ===========================================================================
   deploy:
     name: 部署到云服务器
-    # 使用安装在云服务器上的自托管 runner, 在服务器本地执行部署脚本
-    # 无需 SSH 免密, 不受海外 runner 网络超时限制
     runs-on: self-hosted
     needs: ci
     # 分支级 push 或手动触发才部署, PR 不部署
@@ -70,69 +77,113 @@ jobs:
     #   APP_DIR      可选, 服务器上项目目录, 默认 /opt/CaiGouPetService
     # ------------------------------------------------------------------
     env:
-      # 从 Secrets 读取敏感配置, 注入到部署脚本
       DB_PASS: ${{ secrets.DB_PASS }}
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
       APP_DIR: ${{ secrets.APP_DIR || '/opt/CaiGouPetService' }}
 
     steps:
-      # 自托管 runner 不需要 actions/checkout, 手动 git pull 可控性更强
-      - name: 拉取最新代码并重启 Docker 服务
+      # 从 GitHub Actions 下载之前 CI 构建好的 JAR 包
+      - name: 下载 JAR 包
+        uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: ${{ env.APP_DIR }}
+
+      - name: 停止旧服务并启动新服务
         run: |
           set -e
           echo "=========================================="
           echo "开始部署: $APP_DIR (${{ github.ref_name }}@${{ github.sha }})"
           echo "=========================================="
 
-          # 首次部署时自动克隆仓库
-          if [ ! -d "$APP_DIR/.git" ]; then
-            echo "首次部署: 克隆仓库"
-            mkdir -p "$(dirname "$APP_DIR")"
-            git clone "https://github.com/${{ github.repository }}.git" "$APP_DIR"
-          fi
-
           cd "$APP_DIR"
 
-          # 拉取最新代码
-          git fetch --prune origin
-          git checkout "${{ github.ref_name }}"
-          git pull --ff-only origin "${{ github.ref_name }}"
+          # 确保数据目录存在
+          mkdir -p uploads logs
 
           # 创建 .env (来自仓库 .env.example; 真实密钥由 GitHub Secrets 注入)
-          # .env 已在 .gitignore 中, 不会污染工作区
-          if [ ! -f .env ]; then
-            echo "首次部署: 从 .env.example 生成 .env"
-            cp .env.example .env
-          fi
-          # 覆写敏感密钥: 先删除旧行再追加, 避免 sed 分隔符与特殊字符冲突
-          grep -v '^DB_PASS=' .env > .env.tmp || true
-          echo "DB_PASS=\"${DB_PASS}\"" >> .env.tmp
-          grep -v '^JWT_SECRET=' .env.tmp > .env.tmp2
-          echo "JWT_SECRET=\"${JWT_SECRET}\"" >> .env.tmp2
-          mv .env.tmp2 .env
-
-          # 使用代码库中的 docker-compose.yml 重新构建并启动
-          docker compose down --remove-orphans
-          docker compose up -d --build --force-recreate
-
-          # 清理悬空镜像与构建缓存, 防止磁盘被占满
-          docker image prune -f >/dev/null 2>&1 || true
-          docker builder prune -f >/dev/null 2>&1 || true
-
-          # 健康检查: 依赖 Actuator 的 /actuator/health
-          echo "等待服务启动..."
-          sleep 8
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --retry 5 --retry-delay 3 --retry-connrefused \
-            "http://localhost:${{ vars.APP_PORT || '3000' }}/actuator/health" || echo "000")
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "部署成功: 健康检查通过 (HTTP $HTTP_CODE)"
+          # 先拉取 .env.example 文件（从仓库下载或从该目录读取）
+          if [ -f "$APP_DIR/.env.example" ]; then
+            echo "从本地 .env.example 生成 .env"
+            cp .env.example .env 2>/dev/null || true
           else
-            echo "警告: 健康检查返回 HTTP $HTTP_CODE, 请查看容器日志: docker compose logs"
+            # 如果本地没有（首次部署可能没有 git clone），先 clone 一次
+            if [ ! -d "$APP_DIR/.git" ]; then
+              echo "首次部署: 克隆仓库获取 .env.example"
+              git clone "https://github.com/${{ github.repository }}.git" "$APP_DIR" 2>/dev/null || true
+              cd "$APP_DIR"
+            fi
+            if [ -f .env.example ]; then
+              cp .env.example .env 2>/dev/null || true
+            fi
+          fi
+
+          # 覆写敏感密钥: 先删除旧行再追加
+          if [ -f .env ]; then
+            grep -v '^DB_PASS=' .env > .env.tmp || true
+            echo "DB_PASS=\"${DB_PASS}\"" >> .env.tmp
+            grep -v '^JWT_SECRET=' .env.tmp > .env.tmp2
+            echo "JWT_SECRET=\"${JWT_SECRET}\"" >> .env.tmp2
+            mv .env.tmp2 .env
+          else
+            echo "DB_PASS=\"${DB_PASS}\"" > .env
+            echo "JWT_SECRET=\"${JWT_SECRET}\"" >> .env
+          fi
+
+          # 加载 .env 到环境变量
+          set -a
+          source .env
+          set +a
+
+          # 查找旧的 Java 进程并停止
+          OLD_PID=$(pgrep -f "caiGouPetService" 2>/dev/null || true)
+          if [ -n "$OLD_PID" ]; then
+            echo "停止旧服务 (PID: $OLD_PID)"
+            kill "$OLD_PID" 2>/dev/null || true
+            # 等待进程退出（最多 10 秒）
+            for i in $(seq 1 10); do
+              if ! kill -0 "$OLD_PID" 2>/dev/null; then
+                break
+              fi
+              sleep 1
+            done
+            # 强制终止
+            kill -9 "$OLD_PID" 2>/dev/null || true
+          fi
+
+          # 找到下载的 JAR 文件
+          JAR_FILE=$(ls -t *.jar 2>/dev/null | head -1)
+          if [ -z "$JAR_FILE" ]; then
+            echo "错误: 未找到 JAR 文件"
             exit 1
           fi
+          echo "找到 JAR 文件: $JAR_FILE"
+
+          # 启动新服务(后台运行, 输出日志到 logs/ 目录)
+          nohup java -jar "$JAR_FILE" \
+            --server.port=3000 \
+            > "$APP_DIR/logs/application.log" 2>&1 &
+          NEW_PID=$!
+          echo "新服务已启动 (PID: $NEW_PID)"
+
+          # 健康检查: 等待服务启动
+          echo "等待服务启动..."
+          for i in $(seq 1 12); do
+            sleep 5
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              "http://localhost:3000/actuator/health" 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "部署成功: 健康检查通过 (HTTP $HTTP_CODE, PID: $NEW_PID)"
+              exit 0
+            fi
+            echo "  尝试 $i/12: HTTP $HTTP_CODE"
+          done
+
+          echo "警告: 健康检查超时, 请查看日志: tail -f $APP_DIR/logs/application.log"
+          exit 1
 
   # ===========================================================================
-  # 任务 3: 部署结果通知 (可选, 需要配置通知渠道)
+  # 任务 3: 部署结果通知
   # ===========================================================================
   notify:
     name: 部署结果通知
