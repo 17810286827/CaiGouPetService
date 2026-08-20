@@ -126,26 +126,26 @@ jobs:
 
           # 写入 docker-compose.yml（直接从 workflow 模板生成，不依赖网络拉取代码）
           cat > docker-compose.yml << 'DOCKERCOMPOSE'
-services:
-  app:
-    image: crpi-da59qcl73m93max2.cn-beijing.personal.cr.aliyuncs.com/caigoupet/caigou-pet-service:latest
-    ports:
-      - "${PORT:-3000}:${PORT:-3000}"
-    environment:
-      PORT: ${PORT:-3000}
-      DB_URL: ${DB_URL:-jdbc:mysql://47.94.240.159:3306/caigoupet?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
-      DB_USER: ${DB_USER:-root}
-      DB_PASS: ${DB_PASS:?DB_PASS must be set}
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
-      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
-      UPLOAD_DIR: /app/uploads
-      LOG_PATH: /app/logs
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    volumes:
-      - ./uploads:/app/uploads
-      - ./logs:/app/logs
-    restart: unless-stopped
-DOCKERCOMPOSE
+          services:
+            app:
+              image: crpi-da59qcl73m93max2.cn-beijing.personal.cr.aliyuncs.com/caigoupet/caigou-pet-service:latest
+              ports:
+                - "${PORT:-3000}:${PORT:-3000}"
+              environment:
+                PORT: ${PORT:-3000}
+                DB_URL: ${DB_URL:-jdbc:mysql://47.94.240.159:3306/caigoupet?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
+                DB_USER: ${DB_USER:-root}
+                DB_PASS: ${DB_PASS:?DB_PASS must be set}
+                JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
+                JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+                UPLOAD_DIR: /app/uploads
+                LOG_PATH: /app/logs
+                LOG_LEVEL: ${LOG_LEVEL:-INFO}
+              volumes:
+                - ./uploads:/app/uploads
+                - ./logs:/app/logs
+              restart: unless-stopped
+          DOCKERCOMPOSE
 
           # 登录阿里云 ACR（优先使用专有网络地址，走内网）
           echo "登录阿里云 ACR..."
@@ -160,14 +160,14 @@ DOCKERCOMPOSE
 
           # 创建 .env
           cat > .env << EOF
-PORT=3000
-DB_URL=jdbc:mysql://47.94.240.159:3306/caigoupet?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-DB_USER="${DB_USER}"
-DB_PASS="${DB_PASS}"
-JWT_SECRET="${JWT_SECRET}"
-JWT_EXPIRES_IN=7d
-LOG_LEVEL=INFO
-EOF
+          PORT=3000
+          DB_URL=jdbc:mysql://47.94.240.159:3306/caigoupet?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+          DB_USER="${DB_USER}"
+          DB_PASS="${DB_PASS}"
+          JWT_SECRET="${JWT_SECRET}"
+          JWT_EXPIRES_IN=7d
+          LOG_LEVEL=INFO
+          EOF
 
           # 从 ACR 拉取最新镜像并启动
           docker compose pull
