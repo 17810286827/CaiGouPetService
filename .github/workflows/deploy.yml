@@ -147,12 +147,9 @@ jobs:
               restart: unless-stopped
           DOCKERCOMPOSE
 
-          # 登录阿里云 ACR（优先使用专有网络地址，走内网）
+          # 登录公网 ACR，必须与 docker-compose.yml 中的镜像域名完全一致
+          # VPC 地址和公网地址是两个不同的 Docker Registry 主机，凭据不能混用
           echo "登录阿里云 ACR..."
-          echo "${ACR_PASSWORD}" | docker login \
-            --username="${ACR_USERNAME}" \
-            --password-stdin \
-            crpi-da59qcl73m93max2-vpc.cn-beijing.personal.cr.aliyuncs.com || \
           echo "${ACR_PASSWORD}" | docker login \
             --username="${ACR_USERNAME}" \
             --password-stdin \
