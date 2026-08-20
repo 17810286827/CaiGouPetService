@@ -87,11 +87,13 @@ jobs:
 
     # 所需 GitHub Secrets:
     #   DB_PASS      数据库密码 (云上 MySQL, 对应 .env 的 DB_PASS)
+    #   DB_USER      数据库用户名 (默认 dev_user, 对应 .env 的 DB_USER)
     #   JWT_SECRET   JWT 签名密钥
     #   APP_DIR      可选, 服务器上项目目录, 默认 /opt/CaiGouPetService
     # ------------------------------------------------------------------
     env:
       DB_PASS: ${{ secrets.DB_PASS }}
+      DB_USER: ${{ secrets.DB_USER }}
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
       APP_DIR: ${{ secrets.APP_DIR || '/opt/CaiGouPetService' }}
 
@@ -140,12 +142,15 @@ jobs:
           # 覆写敏感密钥
           if [ -f .env ]; then
             grep -v '^DB_PASS=' .env > .env.tmp || true
-            echo "DB_PASS=\"${DB_PASS}\"" >> .env.tmp
-            grep -v '^JWT_SECRET=' .env.tmp > .env.tmp2
-            echo "JWT_SECRET=\"${JWT_SECRET}\"" >> .env.tmp2
-            mv .env.tmp2 .env
+            grep -v '^DB_USER=' .env.tmp > .env.tmp2 || true
+            echo "DB_PASS=\"${DB_PASS}\"" >> .env.tmp2
+            echo "DB_USER=\"${DB_USER}\"" >> .env.tmp2
+            grep -v '^JWT_SECRET=' .env.tmp2 > .env.tmp3
+            echo "JWT_SECRET=\"${JWT_SECRET}\"" >> .env.tmp3
+            mv .env.tmp3 .env
           else
             echo "DB_PASS=\"${DB_PASS}\"" > .env
+            echo "DB_USER=\"${DB_USER}\"" >> .env
             echo "JWT_SECRET=\"${JWT_SECRET}\"" >> .env
           fi
 
