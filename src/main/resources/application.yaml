@@ -3,7 +3,7 @@ spring:
     name: CaiGouPetService
   # 数据源:MySQL(目标库 caigoupet,内网 192.168.31.90;密码通过环境变量 DB_PASS 提供,禁止入库)
   datasource:
-    url: jdbc:mysql://47.94.240.159:3306/caigoupet?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    url: ${DB_URL:jdbc:mysql://47.94.240.159:3306/caigoupet?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
     username: ${DB_USER:root}
     password: ${DB_PASS:}
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -31,6 +31,13 @@ jwt:
 
 server:
   port: ${PORT:3000}      # 复刻 Express 默认端口
+
+# 日志同时输出到控制台和滚动文件；容器环境通过 LOG_PATH 指向 /app/logs。
+logging:
+  level:
+    root: ${LOG_LEVEL:INFO}
+  file:
+    path: ${LOG_PATH:./logs}
 
 # 文件上传存储目录(Task 3 经 @Value("${upload.dir}") 注入)
 upload:

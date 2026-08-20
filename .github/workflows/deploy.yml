@@ -1,0 +1,159 @@
+# =============================================================================
+# CaiGouPetService — GitHub Actions CI/CD 工作流
+#
+# 触发方式:
+#   - push 到 main / master        → 完整 CI + 部署到云服务器
+#   - pull_request 到 main / master → 仅 CI（编译 + 测试）
+#
+# 部署原理:
+#   通过 SSH 登录云服务器, 在项目目录执行 git pull, 然后用 docker-compose
+#   重新构建并启动容器 (无需 Docker Hub / 容器仓库账号)。
+#
+# 首次使用前置条件 (云服务器上执行一次):
+#   1. 安装 Docker 与 docker-compose 插件
+#   2. 克隆仓库: git clone <仓库地址> /opt/CaiGouPetService
+#   3. 在 /opt/CaiGouPetService 下创建 .env 文件 (参考 .env.example, 填入真实
+#      DB_PASS / JWT_SECRET), 该文件不入库, 每次部署自动带过去
+# =============================================================================
+
+name: CI/CD — Build, Test & Deploy
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  # 支持在 Actions 页面手动触发部署
+  workflow_dispatch:
+
+jobs:
+  # ===========================================================================
+  # 任务 1: CI — 编译 + 测试 (PR 与 push 都会执行)
+  # ===========================================================================
+  ci:
+    name: CI — 编译 + 测试
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 JDK 21（Temurin）
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: 编译并运行测试
+        # Windows 下生成的 mvnw 无执行位, 统一补上
+        run: |
+          chmod +x mvnw
+          ./mvnw -B clean verify
+
+  # ===========================================================================
+  # 任务 2: 部署 — 仅 push 到 main / master 时执行, 依赖 CI 先通过
+  # ===========================================================================
+  deploy:
+    name: 部署到云服务器
+    runs-on: ubuntu-22.04
+    needs: ci
+    # 分支级 push 或手动触发才部署, PR 不部署
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      # ------------------------------------------------------------------
+      # 1. 通过 SSH 执行部署脚本
+      # ------------------------------------------------------------------
+      # 所需 GitHub Secrets:
+      #   DEPLOY_HOST      云服务器公网 IP 或域名
+      #   DEPLOY_USER      SSH 登录用户 (如 root)
+      #   DEPLOY_SSH_KEY   SSH 私钥 (不要在仓库里提交私钥)
+      #   DEPLOY_PORT      可选, SSH 端口, 默认 22
+      #   DB_PASS          数据库密码 (云上 MySQL, 对应 .env 的 DB_PASS)
+      #   JWT_SECRET       JWT 签名密钥
+      #   APP_DIR          可选, 服务器上项目目录, 默认 /opt/CaiGouPetService
+      # ------------------------------------------------------------------
+      - name: SSH 部署
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || '22' }}
+          # 部署脚本中引用的 secrets 由 GitHub 在运行时注入, 不会出现在日志中
+          script: |
+            set -e
+            APP_DIR="${{ secrets.APP_DIR || '/opt/CaiGouPetService' }}"
+            echo "=========================================="
+            echo "开始部署: $APP_DIR (${{ github.ref_name }}@${{ github.sha }})"
+            echo "=========================================="
+
+            # 0. 首次部署时自动克隆仓库
+            if [ ! -d "$APP_DIR/.git" ]; then
+              echo "首次部署: 克隆仓库"
+              mkdir -p "$(dirname "$APP_DIR")"
+              # 私有仓库需额外配置 GH_PAT Secret, 否则直接使用公开的 HTTPS 地址
+              CLONE_URL="https://github.com/${{ github.repository }}.git"
+              if [ -n "${{ secrets.GH_PAT }}" ]; then
+                CLONE_URL="https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}.git"
+              fi
+              git clone "$CLONE_URL" "$APP_DIR"
+            fi
+
+            cd "$APP_DIR"
+
+            # 1. 拉取最新代码
+            git fetch --prune origin
+            git checkout "${{ github.ref_name }}"
+            git pull --ff-only origin "${{ github.ref_name }}"
+
+            # 2. 创建 .env (来自仓库 .env.example; 真实密钥由 GitHub Secrets 注入)
+            #    .env 已在 .gitignore 中, 不会污染工作区
+            if [ ! -f .env ]; then
+              echo "首次部署: 从 .env.example 生成 .env"
+              cp .env.example .env
+            fi
+            # 覆写敏感密钥: 先删除旧行再追加, 避免 sed 分隔符与特殊字符冲突
+            export DB_PASS="${{ secrets.DB_PASS }}"
+            export JWT_SECRET="${{ secrets.JWT_SECRET }}"
+            grep -v '^DB_PASS=' .env > .env.tmp || true
+            echo "DB_PASS=\"${DB_PASS}\"" >> .env.tmp
+            grep -v '^JWT_SECRET=' .env.tmp > .env.tmp2
+            echo "JWT_SECRET=\"${JWT_SECRET}\"" >> .env.tmp2
+            mv .env.tmp2 .env
+
+            # 3. 使用代码库中的 docker-compose.yml 重新构建并启动
+            docker compose down --remove-orphans
+            docker compose up -d --build --force-recreate
+
+            # 4. 清理悬空镜像与构建缓存, 防止磁盘被占满
+            docker image prune -f >/dev/null 2>&1 || true
+            docker builder prune -f >/dev/null 2>&1 || true
+
+            # 5. 健康检查: 依赖 Actuator 的 /actuator/health
+            echo "等待服务启动..."
+            sleep 8
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --retry 5 --retry-delay 3 --retry-connrefused \
+              "http://localhost:${{ vars.APP_PORT || '3000' }}/actuator/health" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "部署成功: 健康检查通过 (HTTP $HTTP_CODE)"
+            else
+              echo "警告: 健康检查返回 HTTP $HTTP_CODE, 请查看容器日志: docker compose logs"
+              exit 1
+            fi
+
+  # ===========================================================================
+  # 任务 3: 部署结果通知 (可选, 需要配置通知渠道)
+  # ===========================================================================
+  notify:
+    name: 部署结果通知
+    runs-on: ubuntu-22.04
+    needs: deploy
+    if: always() && needs.deploy.result != 'skipped'
+
+    steps:
+      - name: 打印部署状态
+        run: |
+          echo "部署状态: ${{ needs.deploy.result }}"
+          echo "详情: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

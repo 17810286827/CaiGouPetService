@@ -37,6 +37,13 @@ build/
 
 # 上传文件目录(运行时产物,测试也会写入,不入库)
 uploads/
+logs/
 
 # Git worktrees
 .worktrees/
+
+# 容器运行时环境配置 (含敏感凭据, 不入库)
+.env
+
+# Docker 构建缓存
+.docker/

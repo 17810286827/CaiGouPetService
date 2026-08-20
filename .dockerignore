@@ -1,0 +1,15 @@
+.git
+.gitignore
+.idea
+.claude
+.superpowers
+.worktrees
+target
+uploads
+logs
+socket-poc
+*.iml
+*.log
+Dockerfile*
+docker-compose*.yml
+README*
