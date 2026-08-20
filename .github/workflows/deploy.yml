@@ -110,18 +110,6 @@ jobs:
       APP_DIR: ${{ secrets.APP_DIR || '/opt/CaiGouPetService' }}
 
     steps:
-      - name: 拉取最新代码
-        run: |
-          if [ ! -d "$APP_DIR/.git" ]; then
-            echo "首次部署: 克隆仓库"
-            mkdir -p "$(dirname "$APP_DIR")"
-            git clone "https://github.com/${{ github.repository }}.git" "$APP_DIR"
-          fi
-          cd "$APP_DIR"
-          git fetch --prune origin
-          git checkout "${{ github.ref_name }}"
-          git pull --ff-only origin "${{ github.ref_name }}"
-
       - name: 登录 ACR 并启动服务
         run: |
           set -e
@@ -129,38 +117,57 @@ jobs:
           echo "开始部署: $APP_DIR (${{ github.ref_name }}@${{ github.sha }})"
           echo "=========================================="
 
+          # 确保项目目录存在
+          mkdir -p "$APP_DIR"
           cd "$APP_DIR"
 
-          # 登录阿里云 ACR（使用专有网络地址，走内网）
+          # 确保数据目录存在
+          mkdir -p uploads logs
+
+          # 写入 docker-compose.yml（直接从 workflow 模板生成，不依赖网络拉取代码）
+          cat > docker-compose.yml << 'DOCKERCOMPOSE'
+services:
+  app:
+    image: crpi-da59qcl73m93max2.cn-beijing.personal.cr.aliyuncs.com/caigoupet/caigou-pet-service:latest
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    environment:
+      PORT: ${PORT:-3000}
+      DB_URL: ${DB_URL:-jdbc:mysql://47.94.240.159:3306/caigoupet?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
+      DB_USER: ${DB_USER:-root}
+      DB_PASS: ${DB_PASS:?DB_PASS must be set}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      UPLOAD_DIR: /app/uploads
+      LOG_PATH: /app/logs
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    restart: unless-stopped
+DOCKERCOMPOSE
+
+          # 登录阿里云 ACR（优先使用专有网络地址，走内网）
           echo "登录阿里云 ACR..."
           echo "${ACR_PASSWORD}" | docker login \
             --username="${ACR_USERNAME}" \
             --password-stdin \
             crpi-da59qcl73m93max2-vpc.cn-beijing.personal.cr.aliyuncs.com || \
-          # 如果专有网络登录失败，退回到公网地址
           echo "${ACR_PASSWORD}" | docker login \
             --username="${ACR_USERNAME}" \
             --password-stdin \
             crpi-da59qcl73m93max2.cn-beijing.personal.cr.aliyuncs.com
 
-          # 创建 .env (来自仓库 .env.example；真实密钥由 GitHub Secrets 注入)
-          if [ -f .env.example ]; then
-            cp .env.example .env 2>/dev/null || true
-          fi
-          # 覆写敏感密钥
-          if [ -f .env ]; then
-            grep -v '^DB_PASS=' .env > .env.tmp || true
-            grep -v '^DB_USER=' .env.tmp > .env.tmp2 || true
-            echo "DB_PASS=\"${DB_PASS}\"" >> .env.tmp2
-            echo "DB_USER=\"${DB_USER}\"" >> .env.tmp2
-            grep -v '^JWT_SECRET=' .env.tmp2 > .env.tmp3
-            echo "JWT_SECRET=\"${JWT_SECRET}\"" >> .env.tmp3
-            mv .env.tmp3 .env
-          else
-            echo "DB_PASS=\"${DB_PASS}\"" > .env
-            echo "DB_USER=\"${DB_USER}\"" >> .env
-            echo "JWT_SECRET=\"${JWT_SECRET}\"" >> .env
-          fi
+          # 创建 .env
+          cat > .env << EOF
+PORT=3000
+DB_URL=jdbc:mysql://47.94.240.159:3306/caigoupet?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+DB_USER="${DB_USER}"
+DB_PASS="${DB_PASS}"
+JWT_SECRET="${JWT_SECRET}"
+JWT_EXPIRES_IN=7d
+LOG_LEVEL=INFO
+EOF
 
           # 从 ACR 拉取最新镜像并启动
           docker compose pull
