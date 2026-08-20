@@ -2,19 +2,19 @@
 # CaiGouPetService — GitHub Actions CI/CD 工作流
 #
 # 触发方式:
-#   - push 到 main / master        → 完整 CI（编译 + 构建 Docker 镜像）+ 部署（自托管 runner 执行）
+#   - push 到 main / master        → CI（编译 + 构建镜像 + 推送到阿里云 ACR）+ 部署
 #   - pull_request 到 main / master → 仅 CI（编译）
 #
 # 部署原理:
-#   CI 在 GitHub 托管 runner 上编译代码, 构建 Docker 镜像, 打包为 tar 上传 artifact.
-#   自托管 runner 在云服务器本地下载镜像 tar, 用 docker load 导入, 然后 docker compose up.
-#   服务器无需从 Docker Hub 拉取 base 镜像, 不受镜像源慢的限制.
+#   CI 在 GitHub 托管 runner 上编译代码、构建 Docker 镜像、推送到阿里云 ACR (北京).
+#   自托管 runner 在 ECS 上从阿里云 ACR 拉取镜像后启动容器.
+#   ECS 也在北京区域，走内网拉取，速度极快.
 #
 # 前置条件 (云服务器上执行一次):
 #   1. 安装 Docker + docker-compose 插件（已装好）
 #   2. 安装 git（已装好）
-#   3. 创建 /opt/CaiGouPetService 目录并授权给 runner 用户（已做）
-#   4. 在 GitHub Secrets 中配置 DB_PASS / JWT_SECRET
+#   3. 在 GitHub Secrets 中配置 ACR 登录信息 + DB_PASS / DB_USER / JWT_SECRET
+#   4. 服务器上先 docker login 到 ACR（或由 workflow 自动登录）
 # =============================================================================
 
 name: CI/CD — Build, Test & Deploy
@@ -27,12 +27,20 @@ on:
   # 支持在 Actions 页面手动触发部署
   workflow_dispatch:
 
+env:
+  # 阿里云 ACR 配置（北京区域）
+  ACR_REGISTRY: crpi-da59qcl73m93max2.cn-beijing.personal.cr.aliyuncs.com
+  ACR_NAMESPACE: caigoupet
+  IMAGE_NAME: caigou-pet-service
+  # 完整的镜像地址
+  IMAGE_URI: crpi-da59qcl73m93max2.cn-beijing.personal.cr.aliyuncs.com/caigoupet/caigou-pet-service
+
 jobs:
   # ===========================================================================
-  # 任务 1: CI — 编译打包 + 构建 Docker 镜像
+  # 任务 1: CI — 编译打包 + 构建并推送 Docker 镜像到 ACR
   # ===========================================================================
   ci:
-    name: CI — 编译 + Docker 构建
+    name: CI — 编译 + 推送镜像到 ACR
     runs-on: ubuntu-22.04
 
     steps:
@@ -47,33 +55,33 @@ jobs:
           cache: maven
 
       - name: 编译打包（跳过测试）
-        # CI 环境无 MySQL 数据库可连, 只编译打包
-        # 集成测试在本地开发环境运行, 部署后靠 /actuator/health 验证
+        # CI 环境无 MySQL 数据库可连，只编译打包
+        # 集成测试在本地开发环境运行，部署后靠 /actuator/health 验证
         run: |
           chmod +x mvnw
           ./mvnw -B clean package -DskipTests
 
-      - name: 设置 Docker 元数据
-        id: meta
-        uses: docker/metadata-action@v5
+      - name: 登录阿里云 ACR
+        uses: docker/login-action@v3
         with:
-          images: caigou-pet-service
-          tags: |
-            type=sha,prefix=,suffix=,format=short
-            type=raw,value=latest
+          registry: ${{ env.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
 
-      - name: 构建 Docker 镜像
+      - name: 构建并推送 Docker 镜像到 ACR
         run: |
-          docker build -t caigou-pet-service:latest .
-          # 保存镜像为 tar 文件（压缩以减小体积）
-          docker save caigou-pet-service:latest | gzip > caigou-pet-service.tar.gz
+          # 生成镜像标签：latest + 短 commit SHA
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
 
-      - name: 上传 Docker 镜像为 artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-image
-          path: caigou-pet-service.tar.gz
-          retention-days: 1
+          # 构建镜像
+          docker build -t "${IMAGE_URI}:latest" -t "${IMAGE_URI}:${SHORT_SHA}" .
+
+          # 推送到阿里云 ACR（走公网，但 ECS 拉取时走内网）
+          docker push "${IMAGE_URI}:latest"
+          docker push "${IMAGE_URI}:${SHORT_SHA}"
+
+          echo "镜像已推送: ${IMAGE_URI}:latest"
 
   # ===========================================================================
   # 任务 2: 部署 — 云服务器自托管 runner 执行
@@ -82,30 +90,27 @@ jobs:
     name: 部署到云服务器
     runs-on: self-hosted
     needs: ci
-    # 分支级 push 或手动触发才部署, PR 不部署
+    # 分支级 push 或手动触发才部署，PR 不部署
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
 
     # 所需 GitHub Secrets:
-    #   DB_PASS      数据库密码 (云上 MySQL, 对应 .env 的 DB_PASS)
-    #   DB_USER      数据库用户名 (默认 dev_user, 对应 .env 的 DB_USER)
-    #   JWT_SECRET   JWT 签名密钥
-    #   APP_DIR      可选, 服务器上项目目录, 默认 /opt/CaiGouPetService
+    #   ACR_USERNAME    阿里云 ACR 登录用户名（账号全名）
+    #   ACR_PASSWORD    阿里云 ACR 登录密码
+    #   DB_PASS         数据库密码
+    #   DB_USER         数据库用户名（默认 dev_user）
+    #   JWT_SECRET      JWT 签名密钥
+    #   APP_DIR         可选，服务器上项目目录，默认 /opt/CaiGouPetService
     # ------------------------------------------------------------------
     env:
+      ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+      ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
       DB_PASS: ${{ secrets.DB_PASS }}
       DB_USER: ${{ secrets.DB_USER }}
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
       APP_DIR: ${{ secrets.APP_DIR || '/opt/CaiGouPetService' }}
 
     steps:
-      - name: 下载 Docker 镜像
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-image
-          path: ${{ env.APP_DIR }}
-
       - name: 拉取最新代码
-        # 需要 docker-compose.yml 和 .env.example 等文件
         run: |
           if [ ! -d "$APP_DIR/.git" ]; then
             echo "首次部署: 克隆仓库"
@@ -117,7 +122,7 @@ jobs:
           git checkout "${{ github.ref_name }}"
           git pull --ff-only origin "${{ github.ref_name }}"
 
-      - name: 加载 Docker 镜像并启动服务
+      - name: 登录 ACR 并启动服务
         run: |
           set -e
           echo "=========================================="
@@ -126,16 +131,19 @@ jobs:
 
           cd "$APP_DIR"
 
-          # 加载 CI 构建好的 Docker 镜像
-          if [ -f caigou-pet-service.tar.gz ]; then
-            echo "加载 Docker 镜像..."
-            gunzip -c caigou-pet-service.tar.gz | docker load
-            rm -f caigou-pet-service.tar.gz
-          else
-            echo "未找到镜像 tar 文件, 将使用本地构建"
-          fi
+          # 登录阿里云 ACR（使用专有网络地址，走内网）
+          echo "登录阿里云 ACR..."
+          echo "${ACR_PASSWORD}" | docker login \
+            --username="${ACR_USERNAME}" \
+            --password-stdin \
+            crpi-da59qcl73m93max2-vpc.cn-beijing.personal.cr.aliyuncs.com || \
+          # 如果专有网络登录失败，退回到公网地址
+          echo "${ACR_PASSWORD}" | docker login \
+            --username="${ACR_USERNAME}" \
+            --password-stdin \
+            crpi-da59qcl73m93max2.cn-beijing.personal.cr.aliyuncs.com
 
-          # 创建 .env (来自仓库 .env.example; 真实密钥由 GitHub Secrets 注入)
+          # 创建 .env (来自仓库 .env.example；真实密钥由 GitHub Secrets 注入)
           if [ -f .env.example ]; then
             cp .env.example .env 2>/dev/null || true
           fi
@@ -154,12 +162,12 @@ jobs:
             echo "JWT_SECRET=\"${JWT_SECRET}\"" >> .env
           fi
 
-          # 使用 docker-compose.yml 启动服务
-          # 注意: 使用本地已加载的镜像, 不从远程拉取
+          # 从 ACR 拉取最新镜像并启动
+          docker compose pull
           docker compose down --remove-orphans
           docker compose up -d --force-recreate
 
-          # 清理悬空镜像
+          # 清理旧镜像
           docker image prune -f >/dev/null 2>&1 || true
 
           # 健康检查
@@ -175,7 +183,7 @@ jobs:
             echo "  尝试 $i/12: HTTP $HTTP_CODE"
           done
 
-          echo "警告: 健康检查超时, 请查看容器日志: docker compose logs"
+          echo "警告: 健康检查超时，请查看容器日志: docker compose logs"
           exit 1
 
   # ===========================================================================

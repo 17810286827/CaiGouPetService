@@ -1,9 +1,7 @@
 services:
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: caigou-pet-service:latest
+    # 镜像来自阿里云 ACR（由 CI 构建并推送），自托管 runner 从 ACR 拉取
+    image: crpi-da59qcl73m93max2.cn-beijing.personal.cr.aliyuncs.com/caigoupet/caigou-pet-service:latest
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
     environment:
