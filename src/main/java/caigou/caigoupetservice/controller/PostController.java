@@ -45,18 +45,33 @@ public class PostController {
     @PublicEndpoint
     @GetMapping
     public Map<String, Object> list(@RequestParam(defaultValue = "1") int page,
-                                    @RequestParam(defaultValue = "20") int limit) {
-        PageView<PostView> view = postService.feed(page, limit);
+                                    @RequestParam(defaultValue = "20") int limit,
+                                    HttpServletRequest request) {
+        // 公开端点可选登录:有 token 时拦截器已填充 currentUserId,用于可见性过滤
+        Long viewerId = (Long) request.getAttribute("currentUserId");
+        PageView<PostView> view = postService.feed(page, limit, viewerId);
         // 返回结构与 Express 一致:{posts, total, page},不额外回显 limit
+        return Map.of("posts", view.getRows(), "total", view.getTotal(), "page", view.getPage());
+    }
+
+    /** 本人草稿列表(需登录):仅返回 status=0 的帖子,按更新时间倒序 */
+    @GetMapping("/drafts")
+    public Map<String, Object> drafts(HttpServletRequest request,
+                                      @RequestParam(defaultValue = "1") int page,
+                                      @RequestParam(defaultValue = "20") int limit) {
+        // 草稿接口必须登录:拦截器保证 currentUserId 非空
+        Long userId = (Long) request.getAttribute("currentUserId");
+        PageView<PostView> view = postService.drafts(userId, page, limit);
         return Map.of("posts", view.getRows(), "total", view.getTotal(), "page", view.getPage());
     }
 
     /** 详情(公开):成功后 service 内部自增浏览量 */
     @PublicEndpoint
     @GetMapping("/{id}")
-    public Map<String, PostView> detail(@PathVariable Long id) {
-        // 404(不存在/已软删)由 service 抛 ApiException,全局处理器统一转 {error}
-        return Map.of("post", postService.detail(id));
+    public Map<String, PostView> detail(@PathVariable Long id, HttpServletRequest request) {
+        // 404(不存在/已软删/不可见)由 service 抛 ApiException,全局处理器统一转 {error}
+        Long viewerId = (Long) request.getAttribute("currentUserId");
+        return Map.of("post", postService.detail(id, viewerId));
     }
 
     /** 编辑(作者):越权由 service 抛 403 */

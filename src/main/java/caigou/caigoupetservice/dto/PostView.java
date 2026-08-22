@@ -33,6 +33,8 @@ public class PostView {
     private List<String> tags;
     /** 状态 */
     private Integer status;
+    /** 可见性:1公开 2仅粉丝 3仅好友 4仅自己 */
+    private Integer visibility;
     /** 浏览数 */
     private Integer view_count;
     /** 点赞数 */
@@ -48,10 +50,10 @@ public class PostView {
     /** 作者信息 */
     private UserView user;
 
-    /** 从实体构造视图(tags 由 JSON 字符串解析为数组) */
+    /** 从实体构造视图(tags 由 JSON 字符串解析为数组,字段顺序与构造器一致) */
     public static PostView from(Post p, UserView author) {
         return new PostView(p.getId(), p.getUserId(), p.getTitle(), p.getContent(), p.getContentType(),
-                p.getSummary(), p.getCoverUrl(), parseTags(p.getTags()), p.getStatus(),
+                p.getSummary(), p.getCoverUrl(), parseTags(p.getTags()), p.getStatus(), p.getVisibility(),
                 p.getViewCount(), p.getLikeCount(), p.getCommentCount(), p.getIsTop(),
                 p.getCreatedAt(), p.getUpdatedAt(), author);
     }

@@ -64,6 +64,37 @@ class PostApiIntegrationTest {
         return OM.readTree(r.getResponse().getContentAsString()).get("post").get("id").asText();
     }
 
+    /** 创建草稿:仅标题,状态 0,返回帖子 ID */
+    private String createDraft(String token, String title) throws Exception {
+        MvcResult r = mockMvc.perform(post("/api/posts").header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(Map.of("title", title, "status", 0))))
+                .andExpect(status().isCreated()).andReturn();
+        return OM.readTree(r.getResponse().getContentAsString()).get("post").get("id").asText();
+    }
+
+    /** 直接插入关注关系(绕过接口,仅构造数据) */
+    private void follow(Long followerId, Long targetId) {
+        jdbc.update("INSERT INTO follows (user_id, follower_id) VALUES (?, ?)", targetId, followerId);
+    }
+
+    /** 按用户名查用户 ID(注册多用户时 testUserId 会被覆盖,统一用此 helper) */
+    private Long testUserIdFor(String username) {
+        return jdbc.queryForObject("SELECT id FROM users WHERE username = ?", Long.class, username);
+    }
+
+    /** 创建指定可见性的公开帖子,返回帖子 ID */
+    private String createPostWithVisibility(String token, String content, int visibility) throws Exception {
+        MvcResult r = mockMvc.perform(post("/api/posts").header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(Map.of(
+                                "content", content,
+                                "status", 1,
+                                "visibility", visibility))))
+                .andExpect(status().isCreated()).andReturn();
+        return OM.readTree(r.getResponse().getContentAsString()).get("post").get("id").asText();
+    }
+
     @Test
     void create_shouldReturn201WithPost() throws Exception {
         String token = register(PREFIX + "c1");
@@ -83,6 +114,91 @@ class PostApiIntegrationTest {
                         .content(OM.writeValueAsString(Map.of("title", "T", "content", ""))))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("内容不能为空"));
+    }
+
+    @Test
+    void createDraft_titleOnly_shouldReturn201WithStatus0() throws Exception {
+        String token = register(PREFIX + "dr1");
+        mockMvc.perform(post("/api/posts").header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(Map.of(
+                                "title", "草稿标题",
+                                "status", 0,
+                                "visibility", 2))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.post.status").value(0))
+                .andExpect(jsonPath("$.post.visibility").value(2))
+                .andExpect(jsonPath("$.post.title").value("草稿标题"));
+    }
+
+    @Test
+    void createDraft_allEmpty_shouldReturn400() throws Exception {
+        String token = register(PREFIX + "dr2");
+        mockMvc.perform(post("/api/posts").header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(Map.of("status", 0))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("草稿内容不能为空"));
+    }
+
+    @Test
+    void drafts_shouldReturnOwnDraftsOnly() throws Exception {
+        String token = register(PREFIX + "dr3");
+        createPost(token, "已发布");
+        mockMvc.perform(post("/api/posts").header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(Map.of("title", "我的草稿", "status", 0))))
+                .andExpect(status().isCreated());
+        mockMvc.perform(get("/api/posts/drafts").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.posts.length()").value(1))
+                .andExpect(jsonPath("$.posts[0].title").value("我的草稿"))
+                .andExpect(jsonPath("$.posts[0].status").value(0));
+    }
+
+    @Test
+    void updateDraft_publish_shouldReturnStatus1() throws Exception {
+        String token = register(PREFIX + "dr4");
+        String pid = createDraft(token, "草稿正文");
+        mockMvc.perform(put("/api/posts/" + pid).header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(Map.of("content", "正式内容", "status", 1))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.post.status").value(1))
+                .andExpect(jsonPath("$.post.content").value("正式内容"));
+    }
+
+    @Test
+    void create_titleTooLong_shouldReturn400() throws Exception {
+        String token = register(PREFIX + "len");
+        String title = "很".repeat(51);
+        mockMvc.perform(post("/api/posts").header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(Map.of("title", title, "content", "正文"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("标题不能超过 50 字"));
+    }
+
+    @Test
+    void create_tooManyTags_shouldReturn400() throws Exception {
+        String token = register(PREFIX + "tag");
+        mockMvc.perform(post("/api/posts").header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(Map.of(
+                                "content", "正文",
+                                "tags", java.util.List.of("a", "b", "c", "d")))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("话题不能超过 3 个"));
+    }
+
+    @Test
+    void create_invalidVisibility_shouldReturn400() throws Exception {
+        String token = register(PREFIX + "vis");
+        mockMvc.perform(post("/api/posts").header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(OM.writeValueAsString(Map.of("content", "正文", "visibility", 9))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("visibility 只能是 1-4"));
     }
 
     @Test
@@ -156,5 +272,54 @@ class PostApiIntegrationTest {
         mockMvc.perform(get("/api/users/" + uid + "/posts"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.posts[0].user.username").value(PREFIX + "c6"));
+    }
+
+    @Test
+    void visibility_anonymousOnlySeesPublic() throws Exception {
+        String token = register(PREFIX + "v1");
+        createPostWithVisibility(token, "公开帖", 1);
+        createPostWithVisibility(token, "仅粉丝帖", 2);
+        mockMvc.perform(get("/api/posts"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.posts[?(@.content=='公开帖')]").exists())
+                .andExpect(jsonPath("$.posts[?(@.content=='仅粉丝帖')]").doesNotExist());
+    }
+
+    @Test
+    void visibility_followerSeesFollowerPost() throws Exception {
+        String author = register(PREFIX + "va");
+        String follower = register(PREFIX + "vf");
+        // register 返回 token,查 ID 需传注册用户名
+        follow(testUserIdFor(PREFIX + "vf"), testUserIdFor(PREFIX + "va"));
+        createPostWithVisibility(author, "粉丝可见", 2);
+        mockMvc.perform(get("/api/posts").header("Authorization", "Bearer " + follower))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.posts[?(@.content=='粉丝可见')]").exists());
+    }
+
+    @Test
+    void visibility_friendSeesFriendPostButFollowerNot() throws Exception {
+        String author = register(PREFIX + "fa");
+        String friend = register(PREFIX + "ff");
+        String follower = register(PREFIX + "fo");
+        // register 返回 token,查 ID 需传注册用户名
+        follow(testUserIdFor(PREFIX + "fo"), testUserIdFor(PREFIX + "fa"));
+        follow(testUserIdFor(PREFIX + "fa"), testUserIdFor(PREFIX + "ff"));
+        follow(testUserIdFor(PREFIX + "ff"), testUserIdFor(PREFIX + "fa"));
+        createPostWithVisibility(author, "好友可见", 3);
+        mockMvc.perform(get("/api/posts").header("Authorization", "Bearer " + friend))
+                .andExpect(jsonPath("$.posts[?(@.content=='好友可见')]").exists());
+        mockMvc.perform(get("/api/posts").header("Authorization", "Bearer " + follower))
+                .andExpect(jsonPath("$.posts[?(@.content=='好友可见')]").doesNotExist());
+    }
+
+    @Test
+    void visibility_authorSeesPrivatePost() throws Exception {
+        String author = register(PREFIX + "pr");
+        createPostWithVisibility(author, "仅自己", 4);
+        mockMvc.perform(get("/api/posts").header("Authorization", "Bearer " + author))
+                .andExpect(jsonPath("$.posts[?(@.content=='仅自己')]").exists());
+        mockMvc.perform(get("/api/posts"))
+                .andExpect(jsonPath("$.posts[?(@.content=='仅自己')]").doesNotExist());
     }
 }

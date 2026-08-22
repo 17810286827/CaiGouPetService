@@ -44,4 +44,18 @@ public interface FollowMapper {
     /** 统计关注总数 */
     @Select("SELECT COUNT(*) FROM follows WHERE follower_id = #{userId}")
     long countFollowing(@Param("userId") Long userId);
+
+    /** 统计关注关系:user_id=被关注者, follower_id=关注者 */
+    @Select("SELECT COUNT(*) FROM follows WHERE follower_id = #{followerId} AND user_id = #{followingId}")
+    int countFollowingRelation(@Param("followerId") Long followerId, @Param("followingId") Long followingId);
+
+    /** followerId 是否关注了 followingId */
+    default boolean isFollowing(Long followerId, Long followingId) {
+        return countFollowingRelation(followerId, followingId) > 0;
+    }
+
+    /** a 与 b 是否互相关注(好友) */
+    default boolean isMutual(Long a, Long b) {
+        return isFollowing(a, b) && isFollowing(b, a);
+    }
 }

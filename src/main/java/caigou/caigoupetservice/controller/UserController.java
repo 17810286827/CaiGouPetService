@@ -63,8 +63,11 @@ public class UserController {
     @GetMapping("/{id}/posts")
     public Map<String, Object> userPosts(@PathVariable Long id,
                                          @RequestParam(defaultValue = "1") int page,
-                                         @RequestParam(defaultValue = "20") int limit) {
-        PageView<PostView> view = postService.userPosts(id, page, limit);
+                                         @RequestParam(defaultValue = "20") int limit,
+                                         HttpServletRequest request) {
+        // 公开端点可选登录:当前登录用户作为 viewerId,用于可见性过滤
+        Long viewerId = (Long) request.getAttribute("currentUserId");
+        PageView<PostView> view = postService.userPosts(id, page, limit, viewerId);
         return Map.of("posts", view.getRows(), "total", view.getTotal(), "page", view.getPage());
     }
 

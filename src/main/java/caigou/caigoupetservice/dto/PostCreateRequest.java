@@ -26,4 +26,8 @@ public class PostCreateRequest {
     private String coverUrl;
     /** 标签数组 */
     private List<String> tags;
+    /** 状态:0=草稿 1=公开(默认) */
+    private Integer status;
+    /** 可见性:1公开 2仅粉丝 3仅好友 4仅自己(默认公开) */
+    private Integer visibility;
 }

@@ -28,6 +28,8 @@ public class Post {
     private String tags;
     /** 状态:0=草稿 1=公开 2=删除 */
     private Integer status;
+    /** 可见性:1公开 2仅粉丝 3仅好友 4仅自己 */
+    private Integer visibility;
     /** 浏览数 */
     private Integer viewCount;
     /** 点赞数 */

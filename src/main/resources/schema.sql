@@ -40,9 +40,10 @@ CREATE TABLE IF NOT EXISTS posts (
     content       TEXT         NULL COMMENT '正文(长文本)',
     content_type  TINYINT      NOT NULL DEFAULT 0 COMMENT '内容类型:0=纯文本 1=markdown 2=富文本',
     summary       VARCHAR(500) NULL COMMENT '摘要(可空)',
-    cover_url     VARCHAR(500) NULL COMMENT '封面图URL(可空)',
+    cover_url     TEXT         NULL COMMENT '封面图URL(逗号分隔多图)',
     tags          JSON         NULL COMMENT '标签数组',
     status        TINYINT      NOT NULL DEFAULT 0 COMMENT '状态:0=草稿 1=公开 2=删除',
+    visibility    TINYINT      NOT NULL DEFAULT 1 COMMENT '可见性:1公开 2仅粉丝 3仅好友 4仅自己',
     view_count    INT          NOT NULL DEFAULT 0 COMMENT '浏览数',
     like_count    INT          NOT NULL DEFAULT 0 COMMENT '点赞数',
     comment_count INT          NOT NULL DEFAULT 0 COMMENT '评论数',
@@ -54,6 +55,10 @@ CREATE TABLE IF NOT EXISTS posts (
     KEY idx_user_status (user_id, status),
     KEY idx_status_created (status, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='帖子表';
+
+-- posts 幂等迁移(老库升级用;continue-on-error=true 容忍重复执行)
+ALTER TABLE posts ADD COLUMN visibility TINYINT NOT NULL DEFAULT 1 COMMENT '可见性:1公开 2仅粉丝 3仅好友 4仅自己';
+ALTER TABLE posts MODIFY cover_url TEXT NULL COMMENT '封面图URL(逗号分隔多图)';
 
 CREATE TABLE IF NOT EXISTS comments (
     id         BIGINT   NOT NULL AUTO_INCREMENT COMMENT '主键ID',

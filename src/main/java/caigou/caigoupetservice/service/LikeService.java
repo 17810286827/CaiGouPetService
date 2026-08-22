@@ -72,14 +72,14 @@ public class LikeService {
         return Map.of("message", "取消点赞成功");
     }
 
-    /** 用户点赞过的帖子列表(分页) */
-    public PageView<PostView> listUserPosts(Long userId, int page, int limit) {
+    /** 用户点赞过的帖子列表(分页),按 viewerId 过滤帖子可见性 */
+    public PageView<PostView> listUserPosts(Long userId, int page, int limit, Long viewerId) {
         // 分页钳制:page 最小 1、limit 上限 100,对齐 Express,避免负 offset 触发 SQL 500
         page = Pagination.clampPage(page);
         limit = Pagination.clampLimit(limit);
         // JOIN 反查可见帖子,再按 id 组装作者视图(过滤掉查询后可能被删除的帖子)
         List<PostView> rows = likeMapper.listUserPosts(userId, (page - 1) * limit, limit)
-                .stream().map(p -> postService.postViewById(p.getId()))
+                .stream().map(p -> postService.postViewById(p.getId(), viewerId))
                 .filter(java.util.Objects::nonNull).toList();
         return new PageView<>(rows, likeMapper.countUserPosts(userId), page);
     }

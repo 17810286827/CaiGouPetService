@@ -75,7 +75,7 @@ public class UserService {
     /**
      * 更新当前登录用户资料:仅更新传入的非空字段,未传字段保持不变
      * @param userId 当前登录用户ID(由拦截器写入 request attribute)
-     * @param req 更新请求体(nickname/avatar_url/email/gender/bio)
+     * @param req 更新请求体(nickname/avatar_url/email/gender/bio/province/city)
      * @return 更新后的最新用户详情(结构同 getProfile)
      */
     public Map<String, Object> updateProfile(Long userId, ProfileUpdateRequest req) {
@@ -87,6 +87,8 @@ public class UserService {
         user.setEmail(req.getEmail());
         user.setGender(req.getGender());
         user.setBio(req.getBio());
+        user.setProvince(req.getProvince());
+        user.setCity(req.getCity());
         userMapper.updateProfile(user);
         // 更新后回查一次,返回最新完整资料给前端
         return getProfile(userId);

@@ -41,6 +41,8 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         // 标注 @PublicEndpoint 的方法直接放行,镜像 Express 未挂 authMiddleware 的公开路由
         // (不限 GET:POST /api/plugins/{id}/download 等公开写接口同样需要放行)
         if (((HandlerMethod) handler).getMethod().isAnnotationPresent(PublicEndpoint.class)) {
+            // 公开端点可选登录:有效 token 填充 currentUserId,无效/缺失按匿名处理
+            trySetOptionalUser(request);
             return true;
         }
         String header = request.getHeader("Authorization");
@@ -64,6 +66,27 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         request.setAttribute("currentUserId", user.getId());
         request.setAttribute("currentUser", UserView.from(user));
         return true;
+    }
+
+    /**
+     * 公开端点可选登录:解析 Authorization Bearer token 填充 currentUserId
+     * 无效/过期/用户被禁用一律按匿名处理,不阻断公开接口
+     */
+    private void trySetOptionalUser(HttpServletRequest request) {
+        String header = request.getHeader("Authorization");
+        if (header == null || !header.startsWith("Bearer ")) {
+            return;
+        }
+        try {
+            Long userId = jwtService.parseUserId(header.substring("Bearer ".length()));
+            // 与受保护端点一致:验签后查库复核用户是否存在且未禁用
+            User user = userMapper.findById(userId);
+            if (user != null && user.getStatus() != null && user.getStatus() == 1) {
+                request.setAttribute("currentUserId", user.getId());
+            }
+        } catch (ApiException ignored) {
+            // 无效 token 不阻断公开接口,统一按匿名处理
+        }
     }
 
     /**

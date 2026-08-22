@@ -21,4 +21,8 @@ public class ProfileUpdateRequest {
     private String gender;
     /** 个人简介 */
     private String bio;
+    /** 省份 */
+    private String province;
+    /** 城市 */
+    private String city;
 }

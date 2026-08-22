@@ -19,8 +19,8 @@ import java.util.List;
 public interface PostMapper {
 
     /** 插入帖子,回填自增主键 */
-    @Insert("INSERT INTO posts (user_id, title, content, content_type, summary, cover_url, tags, status) " +
-            "VALUES (#{userId}, #{title}, #{content}, #{contentType}, #{summary}, #{coverUrl}, #{tags}, #{status})")
+    @Insert("INSERT INTO posts (user_id, title, content, content_type, summary, cover_url, tags, status, visibility) " +
+            "VALUES (#{userId}, #{title}, #{content}, #{contentType}, #{summary}, #{coverUrl}, #{tags}, #{status}, #{visibility})")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(Post post);
 
@@ -48,6 +48,8 @@ public interface PostMapper {
             "<if test='summary != null'> , summary = #{summary}</if>" +
             "<if test='coverUrl != null'> , cover_url = #{coverUrl}</if>" +
             "<if test='tags != null'> , tags = #{tags}</if>" +
+            "<if test='status != null'> , status = #{status}</if>" +
+            "<if test='visibility != null'> , visibility = #{visibility}</if>" +
             " WHERE id = #{id}</script>")
     int update(Post post);
 
@@ -74,4 +76,12 @@ public interface PostMapper {
     /** 统计用户公开帖子总数 */
     @Select("SELECT COUNT(*) FROM posts WHERE user_id = #{userId} AND status = 1")
     long countByUser(@Param("userId") Long userId);
+
+    /** 用户草稿列表:按更新时间倒序 */
+    @Select("SELECT * FROM posts WHERE user_id = #{userId} AND status = 0 ORDER BY updated_at DESC LIMIT #{offset}, #{limit}")
+    List<Post> listDraftsByUser(@Param("userId") Long userId, @Param("offset") int offset, @Param("limit") int limit);
+
+    /** 统计用户草稿总数 */
+    @Select("SELECT COUNT(*) FROM posts WHERE user_id = #{userId} AND status = 0")
+    long countDraftsByUser(@Param("userId") Long userId);
 }

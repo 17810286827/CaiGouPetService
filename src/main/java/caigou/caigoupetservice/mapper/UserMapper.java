@@ -61,6 +61,8 @@ public interface UserMapper {
             "<if test='email != null'> , email = #{email}</if>" +
             "<if test='gender != null'> , gender = #{gender}</if>" +
             "<if test='bio != null'> , bio = #{bio}</if>" +
+            "<if test='province != null'> , province = #{province}</if>" +
+            "<if test='city != null'> , city = #{city}</if>" +
             " WHERE id = #{id}</script>")
     int updateProfile(User user);
 

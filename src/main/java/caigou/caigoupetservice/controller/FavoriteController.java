@@ -49,8 +49,11 @@ public class FavoriteController {
     @GetMapping("/user/{userId}")
     public Map<String, Object> list(@PathVariable Long userId,
                                     @RequestParam(defaultValue = "1") int page,
-                                    @RequestParam(defaultValue = "20") int limit) {
-        PageView<PostView> view = favoriteService.listUserPosts(userId, page, limit);
+                                    @RequestParam(defaultValue = "20") int limit,
+                                    HttpServletRequest request) {
+        // 公开端点可选登录:当前登录用户作为 viewerId,用于帖子可见性过滤
+        Long viewerId = (Long) request.getAttribute("currentUserId");
+        PageView<PostView> view = favoriteService.listUserPosts(userId, page, limit, viewerId);
         return Map.of("posts", view.getRows(), "total", view.getTotal(), "page", view.getPage());
     }
 }

@@ -50,9 +50,12 @@ public class LikeController {
     @GetMapping("/user/{userId}")
     public Map<String, Object> list(@PathVariable Long userId,
                                     @RequestParam(defaultValue = "1") int page,
-                                    @RequestParam(defaultValue = "20") int limit) {
+                                    @RequestParam(defaultValue = "20") int limit,
+                                    HttpServletRequest request) {
+        // 公开端点可选登录:当前登录用户作为 viewerId,用于帖子可见性过滤
+        Long viewerId = (Long) request.getAttribute("currentUserId");
         // 返回结构与 Express 一致:{posts, total, page}
-        PageView<PostView> view = likeService.listUserPosts(userId, page, limit);
+        PageView<PostView> view = likeService.listUserPosts(userId, page, limit, viewerId);
         return Map.of("posts", view.getRows(), "total", view.getTotal(), "page", view.getPage());
     }
 }
